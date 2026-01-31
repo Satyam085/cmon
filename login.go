@@ -21,7 +21,7 @@ func Login(ctx context.Context, loginURL, username, password string) error {
 	)
 	if err != nil {
 		log.Println("  ✗ Failed to load login page:", err)
-		return err
+		return NewLoginFailedError("failed to load login page", err)
 	}
 	log.Println("  ✓ Login page loaded")
 
@@ -39,11 +39,26 @@ func Login(ctx context.Context, loginURL, username, password string) error {
 	)
 	if err != nil {
 		log.Println("  ✗ Failed to submit login form:", err)
-		return err
+		return NewLoginFailedError("failed to submit login form", err)
 	}
 
 	log.Println("  ✓ Login successful")
 	return nil
+}
+
+// IsSessionExpired checks if the current page indicates session expiration
+// by verifying if the complaints table is visible
+func IsSessionExpired(ctx context.Context) bool {
+	var tableExists bool
+	err := chromedp.Run(ctx,
+		chromedp.Evaluate(`document.querySelector("table") !== null`, &tableExists),
+	)
+	
+	// If there's an error checking or table doesn't exist, consider session expired
+	if err != nil || !tableExists {
+		return true
+	}
+	return false
 }
 
 func solveCaptcha(text string) string {

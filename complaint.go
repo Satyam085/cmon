@@ -46,7 +46,14 @@ func FetchComplaints(ctx context.Context, url string, storage *ComplaintStorage,
 	)
 	if err != nil {
 		log.Println("  ✗ Failed to fetch complaints:", err)
-		return nil, err
+		
+		// Check if session expired (table not visible)
+		if IsSessionExpired(ctx) {
+			log.Println("  ⚠️  Session appears to be expired")
+			return nil, NewSessionExpiredError("complaints table not visible")
+		}
+		
+		return nil, NewFetchError("failed to navigate or extract complaints", err)
 	}
 	log.Println("  ✓ Complaints page loaded")
 
