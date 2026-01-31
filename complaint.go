@@ -2,7 +2,6 @@ package main
 
 import (
 	"context"
-	"crypto/tls"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -70,7 +69,8 @@ func FetchComplaints(ctx context.Context, url string, storage *ComplaintStorage,
 			if err != nil {
 				log.Println("  ⚠️  Error fetching details:", err)
 			} else {
-				// Only add to successful list if details were fetched successfully
+				// Only mark as seen and add to successful list if details were fetched successfully
+				storage.MarkAsSeen(complaint.ComplaintNumber)
 				successfulComplaintIDs = append(successfulComplaintIDs, complaint.ComplaintNumber)
 			}
 		}
@@ -107,16 +107,8 @@ func FetchComplaintDetails(ctx context.Context, apiID string, complaintNumber st
 	req.Header.Set("X-Requested-With", "XMLHttpRequest")
 	req.Header.Set("User-Agent", "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/144.0.0.0 Safari/537.36")
 
-	// Skip certificate verification for HTTPS
-	transport := &http.Transport{
-		TLSClientConfig: &tls.Config{
-			InsecureSkipVerify: true,
-		},
-	}
-	client := &http.Client{
-		Transport: transport,
-	}
-	resp, err := client.Do(req)
+	// Use the shared HTTP client
+	resp, err := GetHTTPClient().Do(req)
 	if err != nil {
 		return fmt.Errorf("failed to fetch complaint: %w", err)
 	}
@@ -172,7 +164,7 @@ func FetchComplaintDetails(ctx context.Context, apiID string, complaintNumber st
 	fmt.Printf("Complaint Number: %s (API ID: %s)\n", complaintNumber, apiID)
 	fmt.Println("────────────────────────────────────────────────────────")
 	fmt.Println(string(prettyJSON))
-	fmt.Println("════════════════════════════════════════════════════════\n")
+	fmt.Println("════════════════════════════════════════════════════════")
 
 	// Send to Telegram if configured
 	if telegramConfig != nil {

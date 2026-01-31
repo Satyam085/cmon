@@ -2,14 +2,26 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"log"
+	"net/http"
+	"os"
+	"os/signal"
+	"syscall"
 	"time"
 
 	"github.com/joho/godotenv"
 )
 
+var (
+	startTime time.Time
+	lastFetchTime time.Time
+	lastFetchStatus string
+)
+
 func main() {
+	startTime = time.Now()
 	log.Println("🚀 Starting CMON application...")
 	
 	// Load .env file
@@ -18,46 +30,49 @@ func main() {
 	} else {
 		log.Println("✓ Loaded environment variables from .env file")
 	}
-	loginURL := "https://complaint.dgvcl.com/"
-	complaintURL := "https://complaint.dgvcl.com/dashboard_complaint_list?from_date=&to_date=&honame=1&coname=21&doname=24&sdoname=87&cStatus=2&commobile="
 
-	username := "2124087_technical"
-	password := "dgvcl1234"
+	// Load configuration
+	cfg, err := LoadConfig()
+	if err != nil {
+		log.Fatal("❌ Configuration error:", err)
+	}
+	log.Printf("✓ Loaded credentials for user: %s", cfg.Username)
 
 	log.Println("📋 Initializing complaint storage...")
 	storage := NewComplaintStorage()
 
-	log.Println("� Initializing Telegram...")
+	log.Println("📱 Initializing Telegram...")
 	telegramConfig := NewTelegramConfig()
 
-	log.Println("�📋 Initializing browser context...")
+	// Start health check server in background
+	go startHealthCheckServer(cfg.HealthCheckPort)
+	log.Printf("✓ Health check server started on :%s", cfg.HealthCheckPort)
+
+	log.Println("🌐 Initializing browser context...")
 	ctx, cancel := NewBrowserContext()
 	defer cancel()
 	log.Println("✓ Browser context created")
 
 	// Login with retry logic
-	maxLoginRetries := 3
-	loginRetryDelay := 5 * time.Second
-	
 	log.Println("🔐 Attempting to login...")
 	var loginErr error
-	for attempt := 1; attempt <= maxLoginRetries; attempt++ {
-		log.Printf("   Login attempt %d/%d...", attempt, maxLoginRetries)
-		loginErr = Login(ctx, loginURL, username, password)
+	for attempt := 1; attempt <= cfg.MaxLoginRetries; attempt++ {
+		log.Printf("   Login attempt %d/%d...", attempt, cfg.MaxLoginRetries)
+		loginErr = Login(ctx, cfg.LoginURL, cfg.Username, cfg.Password)
 		if loginErr == nil {
 			log.Println("✓ Login successful")
 			break
 		}
 		
-		if attempt < maxLoginRetries {
+		if attempt < cfg.MaxLoginRetries {
 			log.Printf("   ❌ Login failed: %v", loginErr)
-			log.Printf("   ⏳ Retrying in %v seconds...", loginRetryDelay.Seconds())
-			time.Sleep(loginRetryDelay)
+			log.Printf("   ⏳ Retrying in %v...", cfg.LoginRetryDelay)
+			time.Sleep(cfg.LoginRetryDelay)
 		}
 	}
 	
 	if loginErr != nil {
-		log.Fatal("❌ Login failed after", maxLoginRetries, "attempts:", loginErr)
+		log.Fatal("❌ Login failed after", cfg.MaxLoginRetries, "attempts:", loginErr)
 	}
 
 	log.Println("⏳ Waiting for page to load...")
@@ -65,31 +80,52 @@ func main() {
 
 	// Initial fetch
 	log.Println("📬 Fetching complaints...")
-	_, err := FetchComplaints(ctx, complaintURL, storage, telegramConfig)
+	_, err = FetchComplaints(ctx, cfg.ComplaintURL, storage, telegramConfig)
 	if err != nil {
 		log.Fatal("❌ Failed to fetch complaints:", err)
 	}
+	lastFetchTime = time.Now()
+	lastFetchStatus = "success"
 
 	log.Println("✅ Initial fetch completed!")
-	log.Println("⏰ Starting refresh loop - will check every 15 minutes...")
+	log.Printf("⏰ Starting refresh loop - will check every %v...\n", cfg.FetchInterval)
 	log.Println("═══════════════════════════════════════════════════════════")
 
-	// Refresh every 15 minutes
-	ticker := time.NewTicker(15 * time.Minute)
+	// Set up graceful shutdown
+	shutdownCtx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
+
+	// Refresh ticker
+	ticker := time.NewTicker(cfg.FetchInterval)
 	defer ticker.Stop()
 
-	for range ticker.C {
-		log.Println("\n📬 Refreshing complaints list...")
-		log.Println("⏰ Time:", time.Now().Format("2006-01-02 15:04:05"))
-		
-		// Attempt to fetch with full retry logic
-		err := fetchWithRetry(ctx, cancel, &ctx, &cancel, complaintURL, storage, telegramConfig, loginURL, username, password)
-		if err != nil {
-			log.Println("⚠️  Final error after all retry attempts:", err)
-			// Continue to next iteration - don't exit the loop
+	// Main loop with graceful shutdown
+	for {
+		select {
+		case <-shutdownCtx.Done():
+			log.Println("\n🛑 Shutdown signal received, cleaning up...")
+			cancel() // Cancel browser context
+			log.Println("✅ Cleanup complete, shutting down")
+			return
+
+		case <-ticker.C:
+			log.Println("\n📬 Refreshing complaints list...")
+			log.Println("⏰ Time:", time.Now().Format("2006-01-02 15:04:05"))
+			
+			// Attempt to fetch with full retry logic
+			var fetchErr error
+			ctx, cancel, fetchErr = fetchWithRetry(ctx, cancel, cfg.ComplaintURL, storage, telegramConfig, cfg.LoginURL, cfg.Username, cfg.Password)
+			if fetchErr != nil {
+				log.Println("⚠️  Final error after all retry attempts:", fetchErr)
+				lastFetchStatus = fmt.Sprintf("error: %v", fetchErr)
+				// Continue to next iteration - don't exit the loop
+			} else {
+				lastFetchTime = time.Now()
+				lastFetchStatus = "success"
+			}
+			
+			log.Println("═══════════════════════════════════════════════════════════")
 		}
-		
-		log.Println("═══════════════════════════════════════════════════════════")
 	}
 }
 
@@ -102,8 +138,9 @@ func main() {
 //   │       ├─ restart browser
 //   │       ├─ re-login again
 //   │       └─ if still fails → Telegram alert
-func fetchWithRetry(ctx context.Context, cancel context.CancelFunc, ctxPtr *context.Context, cancelPtr *context.CancelFunc, 
-	complaintURL string, storage *ComplaintStorage, telegramConfig *TelegramConfig, loginURL, username, password string) error {
+// Returns: (newContext, newCancelFunc, error)
+func fetchWithRetry(ctx context.Context, cancel context.CancelFunc,
+	complaintURL string, storage *ComplaintStorage, telegramConfig *TelegramConfig, loginURL, username, password string) (context.Context, context.CancelFunc, error) {
 	
 	// First attempt to fetch
 	newCount, err := FetchComplaints(ctx, complaintURL, storage, telegramConfig)
@@ -113,7 +150,7 @@ func fetchWithRetry(ctx context.Context, cancel context.CancelFunc, ctxPtr *cont
 		if len(newCount) == 0 {
 			log.Println("✓ No new complaints")
 		}
-		return nil
+		return ctx, cancel, nil
 	}
 	
 	// Check if it's a session expiration error
@@ -124,7 +161,7 @@ func fetchWithRetry(ctx context.Context, cancel context.CancelFunc, ctxPtr *cont
 	} else {
 		// Normal error - just log and return
 		log.Println("⚠️  Error fetching complaints:", err)
-		return err
+		return ctx, cancel, err
 	}
 	
 	// Session expired - attempt re-login
@@ -142,40 +179,38 @@ func fetchWithRetry(ctx context.Context, cancel context.CancelFunc, ctxPtr *cont
 				if len(newCount) == 0 {
 					log.Println("✓ No new complaints")
 				}
-				return nil
+				return ctx, cancel, nil
 			}
 			
 			log.Println("⚠️  Fetch still failed after re-login:", retryErr)
-			return retryErr
+			return ctx, cancel, retryErr
 		}
 		
 		// Re-login failed - restart browser and try again
 		log.Println("❌ Re-login failed:", loginErr)
 		log.Println("🔄 Restarting browser context...")
 		
-		// Update the context pointers with new context
-		newCtx, newCancel := RestartBrowserContext(cancel)
-		*ctxPtr = newCtx
-		*cancelPtr = newCancel
+		// Restart browser context
+		ctx, cancel = RestartBrowserContext(cancel)
 		
 		log.Println("🔐 Attempting login after browser restart...")
-		loginErr2 := Login(newCtx, loginURL, username, password)
+		loginErr2 := Login(ctx, loginURL, username, password)
 		
 		if loginErr2 == nil {
 			log.Println("✓ Login successful after browser restart, retrying fetch...")
 			
 			// Retry fetch after successful re-login
-			newCount, retryErr := FetchComplaints(newCtx, complaintURL, storage, telegramConfig)
+			newCount, retryErr := FetchComplaints(ctx, complaintURL, storage, telegramConfig)
 			if retryErr == nil {
 				log.Println("✓ Fetch successful after browser restart")
 				if len(newCount) == 0 {
 					log.Println("✓ No new complaints")
 				}
-				return nil
+				return ctx, cancel, nil
 			}
 			
 			log.Println("⚠️  Fetch failed after browser restart:", retryErr)
-			return retryErr
+			return ctx, cancel, retryErr
 		}
 		
 		// All retry attempts failed - send Telegram alert
@@ -192,8 +227,38 @@ func fetchWithRetry(ctx context.Context, cancel context.CancelFunc, ctxPtr *cont
 			log.Println("⚠️  Failed to send Telegram alert:", alertErr)
 		}
 		
-		return fmt.Errorf("all retry attempts failed: %w", loginErr2)
+		return ctx, cancel, fmt.Errorf("all retry attempts failed: %w", loginErr2)
 	}
 	
-	return err
+	return ctx, cancel, err
+}
+
+// Health check types and handler
+
+type HealthStatus struct {
+	Status        string    `json:"status"`
+	Uptime        string    `json:"uptime"`
+	LastFetchTime string    `json:"last_fetch_time"`
+	LastFetchStatus string  `json:"last_fetch_status"`
+}
+
+func startHealthCheckServer(port string) {
+	http.HandleFunc("/health", func(w http.ResponseWriter, r *http.Request) {
+		uptime := time.Since(startTime)
+		
+		status := HealthStatus{
+			Status:        "healthy",
+			Uptime:        uptime.String(),
+			LastFetchTime: lastFetchTime.Format("2006-01-02 15:04:05"),
+			LastFetchStatus: lastFetchStatus,
+		}
+		
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		json.NewEncoder(w).Encode(status)
+	})
+	
+	if err := http.ListenAndServe(":"+port, nil); err != nil {
+		log.Printf("⚠️  Health check server error: %v", err)
+	}
 }

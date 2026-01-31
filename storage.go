@@ -54,13 +54,14 @@ func (cs *ComplaintStorage) loadFromFile() {
 func (cs *ComplaintStorage) IsNew(complaintID string) bool {
 	cs.mu.Lock()
 	defer cs.mu.Unlock()
+	return !cs.seen[complaintID]
+}
 
-	if cs.seen[complaintID] {
-		return false
-	}
-
+// MarkAsSeen marks a complaint as seen in storage
+func (cs *ComplaintStorage) MarkAsSeen(complaintID string) {
+	cs.mu.Lock()
+	defer cs.mu.Unlock()
 	cs.seen[complaintID] = true
-	return true
 }
 
 func (cs *ComplaintStorage) SaveToFile(complaintID string) error {
