@@ -12,7 +12,7 @@ import (
 	"github.com/chromedp/chromedp"
 )
 
-func FetchComplaints(ctx context.Context, url string, storage *ComplaintStorage) ([]string, error) {
+func FetchComplaints(ctx context.Context, url string, storage *ComplaintStorage, telegramConfig *TelegramConfig) ([]string, error) {
 	log.Println("  → Navigating to complaints page...")
 	
 	// Extract both complaint links with their onclick IDs and basic data
@@ -59,7 +59,7 @@ func FetchComplaints(ctx context.Context, url string, storage *ComplaintStorage)
 		if storage.IsNew(complaint.ComplaintNumber) {
 			// Fetch and log complaint details from API
 			log.Println("🆕 New Complaint -", complaint.ComplaintNumber, "(API ID:", complaint.APIID, ")")
-			err := FetchComplaintDetails(ctx, complaint.APIID, complaint.ComplaintNumber)
+			err := FetchComplaintDetails(ctx, complaint.APIID, complaint.ComplaintNumber, telegramConfig)
 			if err != nil {
 				log.Println("  ⚠️  Error fetching details:", err)
 			} else {
@@ -84,7 +84,7 @@ func FetchComplaints(ctx context.Context, url string, storage *ComplaintStorage)
 }
 
 // FetchComplaintDetails fetches the complaint details from the API
-func FetchComplaintDetails(ctx context.Context, apiID string, complaintNumber string) error {
+func FetchComplaintDetails(ctx context.Context, apiID string, complaintNumber string, telegramConfig *TelegramConfig) error {
 	apiURL := fmt.Sprintf("https://complaint.dgvcl.com/api/complaint-record/%s", apiID)
 
 	req, err := http.NewRequestWithContext(ctx, "GET", apiURL, nil)
@@ -166,6 +166,13 @@ func FetchComplaintDetails(ctx context.Context, apiID string, complaintNumber st
 	fmt.Println("────────────────────────────────────────────────────────")
 	fmt.Println(string(prettyJSON))
 	fmt.Println("════════════════════════════════════════════════════════\n")
+
+	// Send to Telegram if configured
+	if telegramConfig != nil {
+		if err := telegramConfig.SendComplaintMessage(string(prettyJSON), complaintNumber); err != nil {
+			log.Println("⚠️  Failed to send Telegram notification:", err)
+		}
+	}
 
 	return nil
 }
