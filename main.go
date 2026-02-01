@@ -21,6 +21,16 @@ var (
 )
 
 func main() {
+
+	// Force Indian Standard Time (IST) for all time operations
+	ist, err := time.LoadLocation("Asia/Kolkata")
+	if err != nil {
+		log.Fatal("❌ Failed to load IST timezone:", err)
+	}
+	time.Local = ist
+
+	// Application start
+
 	startTime = time.Now()
 	log.Println("🚀 Starting CMON application...")
 
