@@ -17,16 +17,16 @@ type TelegramConfig struct {
 }
 
 type TelegramMessage struct {
-	ChatID      string `json:"chat_id"`
-	Text        string `json:"text"`
-	ParseMode   string `json:"parse_mode"`
-	DisableWebPagePreview bool `json:"disable_web_page_preview"`
+	ChatID                string `json:"chat_id"`
+	Text                  string `json:"text"`
+	ParseMode             string `json:"parse_mode"`
+	DisableWebPagePreview bool   `json:"disable_web_page_preview"`
 }
 
 func NewTelegramConfig() *TelegramConfig {
 	botToken := os.Getenv("TELEGRAM_BOT_TOKEN")
 	chatID := os.Getenv("TELEGRAM_CHAT_ID")
-	
+
 	if botToken == "" || chatID == "" {
 		log.Println("⚠️  TELEGRAM_BOT_TOKEN or TELEGRAM_CHAT_ID not set. Telegram notifications disabled.")
 		if botToken == "" {
@@ -37,7 +37,7 @@ func NewTelegramConfig() *TelegramConfig {
 		}
 		return nil
 	}
-	
+
 	log.Println("✓ Telegram configured successfully")
 	return &TelegramConfig{
 		BotToken: botToken,
@@ -45,19 +45,19 @@ func NewTelegramConfig() *TelegramConfig {
 	}
 }
 
-func (tc *TelegramConfig) SendComplaintMessage(complaintJSON string, complaintNumber string) error {
+func (tc *TelegramConfig) SendComplaintMessage(complaintJSON string, complaintNumber string) (string, error) {
 	if tc == nil {
 		log.Println("   ⚠️  Telegram not configured, skipping message send")
-		return nil // Telegram not configured
+		return "", nil // Telegram not configured
 	}
 
 	log.Println("   📨 Sending complaint to Telegram...")
-	
+
 	// Parse JSON to extract fields
 	var complaint map[string]interface{}
 	err := json.Unmarshal([]byte(complaintJSON), &complaint)
 	if err != nil {
-		return fmt.Errorf("failed to parse complaint JSON: %w", err)
+		return "", fmt.Errorf("failed to parse complaint JSON: %w", err)
 	}
 
 	// Helper function to safely extract values, converting null to empty string
@@ -69,18 +69,20 @@ func (tc *TelegramConfig) SendComplaintMessage(complaintJSON string, complaintNu
 		return fmt.Sprintf("%v", val)
 	}
 
-	// Format the message in a user-friendly way
 	message := fmt.Sprintf(
-		"<b>--New Complaint--</b>\n\n" +
-		"<b>Complaint Number:</b> %s\n" +
-		"<b>Consumer Number:</b> %s\n" +
-		"<b>Complainant Name:</b> %s\n" +
-		"<b>Mobile Number:</b> %s\n" +
-		"<b>Complaint Date:</b> %s\n\n" +
-		"<b>Description:</b>\n%s\n\n" +
-		"<b>Location:</b> %s\n" +
-		"<b>Area:</b> %s",
-
+		"<b>New Complaint</b>\n"+
+			"━━━━━━━━━━━━━━━━━━━━\n\n"+
+			"📋 <b>Complaint No:</b> %s\n"+
+			"🔢 <b>Consumer No:</b> %s\n\n"+
+			"👤 <b>Complainant:</b> %s\n"+
+			"📱 <b>Mobile:</b> %s\n"+
+			"📅 <b>Date:</b> %s\n\n"+
+			"━━━━━━━━━━━━━━━━━━━━\n"+
+			"<b>📝 Description:</b>\n<pre>%s</pre>\n\n"+
+			"━━━━━━━━━━━━━━━━━━━━\n"+
+			"📍 <b>Location:</b> %s\n"+
+			"🗺️ <b>Area:</b> %s\n"+
+			"━━━━━━━━━━━━━━━━━━━━\n",
 		getValue("complain_no"),
 		getValue("consumer_no"),
 		getValue("complainant_name"),
@@ -100,35 +102,43 @@ func (tc *TelegramConfig) SendComplaintMessage(complaintJSON string, complaintNu
 
 	jsonData, err := json.Marshal(telegramMsg)
 	if err != nil {
-		return fmt.Errorf("failed to marshal Telegram message: %w", err)
+		return "", fmt.Errorf("failed to marshal Telegram message: %w", err)
 	}
 
 	apiURL := fmt.Sprintf("https://api.telegram.org/bot%s/sendMessage", tc.BotToken)
-	
+
 	resp, err := http.Post(apiURL, "application/json", bytes.NewBuffer(jsonData))
 	if err != nil {
-		return fmt.Errorf("failed to send Telegram message: %w", err)
+		return "", fmt.Errorf("failed to send Telegram message: %w", err)
 	}
 	defer resp.Body.Close()
 
 	body, err := io.ReadAll(resp.Body)
 	if err != nil {
-		return fmt.Errorf("failed to read Telegram response: %w", err)
+		return "", fmt.Errorf("failed to read Telegram response: %w", err)
 	}
 
 	// Check if response is successful
 	var result map[string]interface{}
 	err = json.Unmarshal(body, &result)
 	if err != nil {
-		return fmt.Errorf("failed to parse Telegram response: %w", err)
+		return "", fmt.Errorf("failed to parse Telegram response: %w", err)
 	}
 
 	if ok, exists := result["ok"].(bool); !exists || !ok {
-		return fmt.Errorf("Telegram API error: %v", result)
+		return "", fmt.Errorf("Telegram API error: %v", result)
+	}
+
+	// Extract message ID from response
+	var messageID string
+	if msgResult, ok := result["result"].(map[string]interface{}); ok {
+		if msgID, ok := msgResult["message_id"].(float64); ok {
+			messageID = fmt.Sprintf("%.0f", msgID)
+		}
 	}
 
 	log.Println("   ✓ Complaint successfully sent to Telegram")
-	return nil
+	return messageID, nil
 }
 
 // SendCriticalAlert sends a critical failure alert to Telegram
@@ -139,14 +149,14 @@ func (tc *TelegramConfig) SendCriticalAlert(errorType, errorMsg string, retryCou
 	}
 
 	log.Println("   🚨 Sending critical alert to Telegram...")
-	
+
 	message := fmt.Sprintf(
 		"🚨 <b>CRITICAL ALERT - CMON SERVICE</b>\n\n"+
-		"<b>Error Type:</b> %s\n"+
-		"<b>Error Message:</b> %s\n"+
-		"<b>Retry Attempts:</b> %d\n"+
-		"<b>Timestamp:</b> %s\n\n"+
-		"⚠️ <b>Action Required:</b> Please check the service immediately.",
+			"<b>Error Type:</b> %s\n"+
+			"<b>Error Message:</b> %s\n"+
+			"<b>Retry Attempts:</b> %d\n"+
+			"<b>Timestamp:</b> %s\n\n"+
+			"⚠️ <b>Action Required:</b> Please check the service immediately.",
 		errorType,
 		errorMsg,
 		retryCount,
@@ -166,7 +176,7 @@ func (tc *TelegramConfig) SendCriticalAlert(errorType, errorMsg string, retryCou
 	}
 
 	apiURL := fmt.Sprintf("https://api.telegram.org/bot%s/sendMessage", tc.BotToken)
-	
+
 	resp, err := http.Post(apiURL, "application/json", bytes.NewBuffer(jsonData))
 	if err != nil {
 		return fmt.Errorf("failed to send Telegram alert: %w", err)
@@ -192,3 +202,61 @@ func (tc *TelegramConfig) SendCriticalAlert(errorType, errorMsg string, retryCou
 	return nil
 }
 
+type EditMessageRequest struct {
+	ChatID    string `json:"chat_id"`
+	MessageID string `json:"message_id"`
+	Text      string `json:"text"`
+	ParseMode string `json:"parse_mode"`
+}
+
+func (tc *TelegramConfig) EditMessageText(chatID, messageID, newText string) error {
+	if tc == nil {
+		log.Println("   ⚠️  Telegram not configured, skipping message edit")
+		return nil
+	}
+
+	if messageID == "" {
+		log.Println("   ⚠️  No message ID provided, skipping edit")
+		return nil
+	}
+
+	log.Println("   📝 Editing Telegram message...")
+
+	req := EditMessageRequest{
+		ChatID:    chatID,
+		MessageID: messageID,
+		Text:      newText,
+		ParseMode: "HTML",
+	}
+
+	jsonData, err := json.Marshal(req)
+	if err != nil {
+		return fmt.Errorf("failed to marshal edit request: %w", err)
+	}
+
+	apiURL := fmt.Sprintf("https://api.telegram.org/bot%s/editMessageText", tc.BotToken)
+
+	resp, err := http.Post(apiURL, "application/json", bytes.NewBuffer(jsonData))
+	if err != nil {
+		return fmt.Errorf("failed to edit Telegram message: %w", err)
+	}
+	defer resp.Body.Close()
+
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return fmt.Errorf("failed to read Telegram response: %w", err)
+	}
+
+	var result map[string]interface{}
+	err = json.Unmarshal(body, &result)
+	if err != nil {
+		return fmt.Errorf("failed to parse Telegram response: %w", err)
+	}
+
+	if ok, exists := result["ok"].(bool); !exists || !ok {
+		return fmt.Errorf("Telegram API error: %v", result)
+	}
+
+	log.Println("   ✓ Message successfully edited")
+	return nil
+}

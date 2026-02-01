@@ -11,24 +11,59 @@ import (
 	"github.com/chromedp/chromedp"
 )
 
-func FetchComplaints(ctx context.Context, url string, storage *ComplaintStorage, telegramConfig *TelegramConfig) ([]string, error) {
-	log.Println("  → Navigating to complaints page...")
-	
-	// Extract both complaint links with their onclick IDs and basic data
-	type ComplaintLink struct {
-		ComplaintNumber string
-		APIID           string
+// ComplaintLink holds the complaint number and API ID
+type ComplaintLink struct {
+	ComplaintNumber string
+	APIID           string
+}
+
+// FetchComplaints orchestrates the fetching of complaints from all pages.
+func FetchComplaints(ctx context.Context, baseURL string, storage *ComplaintStorage, telegramConfig *TelegramConfig) ([]ComplaintRecord, error) {
+	var allNewComplaints []ComplaintRecord
+	currentPage := 1
+
+	for {
+		pageURL := fmt.Sprintf("%s&page=%d", baseURL, currentPage)
+		log.Printf("📄 Fetching complaints from page %d...", currentPage)
+
+		newComplaints, hasNextPage, err := fetchComplaintsFromPage(ctx, pageURL, storage, telegramConfig)
+		if err != nil {
+			// If it's a session-expired error, we should stop and report it
+			if _, ok := err.(*SessionExpiredError); ok {
+				return allNewComplaints, err
+			}
+			// For other errors, we might want to log and continue, or stop
+			log.Printf("  ⚠️  Error fetching page %d: %v", currentPage, err)
+			break // Stop on any error for now
+		}
+
+		if len(newComplaints) > 0 {
+			allNewComplaints = append(allNewComplaints, newComplaints...)
+		}
+
+		// Check if there are more pages by looking for the Next button
+		if !hasNextPage {
+			log.Println("✅ No more pages available")
+			break
+		}
+
+		currentPage++
 	}
-	
+
+	log.Printf("🎉 Total new complaints processed from all pages: %d", len(allNewComplaints))
+	return allNewComplaints, nil
+}
+
+// fetchComplaintsFromPage fetches complaints from a single page URL.
+// Returns: complaints, hasNextPage, error
+func fetchComplaintsFromPage(ctx context.Context, url string, storage *ComplaintStorage, telegramConfig *TelegramConfig) ([]ComplaintRecord, bool, error) {
+	log.Println("  → Navigating to complaints page...")
+
 	var complaintLinks []ComplaintLink
 
 	err := chromedp.Run(ctx,
 		chromedp.Navigate(url),
-
-		// wait for table to load
 		chromedp.WaitVisible("table", chromedp.ByQuery),
-
-		// extract complaint numbers and API IDs from onclick attributes
 		chromedp.Evaluate(`
 			Array.from(document.querySelectorAll("table tbody tr")).map(row => {
 				const link = row.querySelector('a[onclick*="openModelData"]');
@@ -45,58 +80,74 @@ func FetchComplaints(ctx context.Context, url string, storage *ComplaintStorage,
 	)
 	if err != nil {
 		log.Println("  ✗ Failed to fetch complaints:", err)
-		
-		// Check if session expired (table not visible)
 		if IsSessionExpired(ctx) {
 			log.Println("  ⚠️  Session appears to be expired")
-			return nil, NewSessionExpiredError("complaints table not visible")
+			return nil, false, NewSessionExpiredError("complaints table not visible")
 		}
-		
-		return nil, NewFetchError("failed to navigate or extract complaints", err)
+		return nil, false, NewFetchError("failed to navigate or extract complaints", err)
 	}
 	log.Println("  ✓ Complaints page loaded")
 
-	log.Println("📄 Total complaints found:", len(complaintLinks))
+	log.Println("📄 Total complaints found on this page:", len(complaintLinks))
 
-	var successfulComplaintIDs []string
-	
-	// Process each complaint
+	var successfulComplaints []ComplaintRecord
+
 	for _, complaint := range complaintLinks {
 		if storage.IsNew(complaint.ComplaintNumber) {
-			// Fetch and log complaint details from API
 			log.Println("🆕 New Complaint -", complaint.ComplaintNumber, "(API ID:", complaint.APIID, ")")
-			err := FetchComplaintDetails(ctx, complaint.APIID, complaint.ComplaintNumber, telegramConfig)
-			if err != nil {
-				log.Println("  ⚠️  Error fetching details:", err)
-			} else {
-				// Only mark as seen and add to successful list if details were fetched successfully
+			messageID := FetchComplaintDetails(ctx, complaint.APIID, complaint.ComplaintNumber, telegramConfig)
+			if messageID != "" {
 				storage.MarkAsSeen(complaint.ComplaintNumber)
-				successfulComplaintIDs = append(successfulComplaintIDs, complaint.ComplaintNumber)
+				successfulComplaints = append(successfulComplaints, ComplaintRecord{
+					ComplaintID: complaint.ComplaintNumber,
+					MessageID:   messageID,
+				})
 			}
 		}
 	}
 
-	log.Println("🆕 New complaints processed:", len(successfulComplaintIDs))
+	log.Println("🆕 New complaints processed on this page:", len(successfulComplaints))
 
-	// Save only successfully processed complaint IDs to file
-	if len(successfulComplaintIDs) > 0 {
-		if err := storage.SaveMultiple(successfulComplaintIDs); err != nil {
-			log.Println("⚠️  Failed to save complaint IDs:", err)
+	if len(successfulComplaints) > 0 {
+		if err := storage.SaveMultiple(successfulComplaints); err != nil {
+			log.Println("⚠️  Failed to save complaint records:", err)
 		} else {
-			log.Println("💾 Saved", len(successfulComplaintIDs), "new complaint IDs")
+			log.Println("💾 Saved", len(successfulComplaints), "new complaint records")
+			for _, c := range successfulComplaints {
+				storage.SetMessageID(c.ComplaintID, c.MessageID)
+			}
 		}
 	}
 
-	return successfulComplaintIDs, nil
+	// Check for next page using pagination controls
+	var hasNextPage bool
+	chromedp.Run(ctx,
+		chromedp.Evaluate(`
+			(function() {
+				const nextBtn = document.querySelector('a[rel="next"]');
+				if (!nextBtn) return false;
+				// Check if next button is disabled
+				const parentLi = nextBtn.closest('li');
+				if (parentLi && parentLi.classList.contains('disabled')) return false;
+				// Check if href exists and is valid
+				const href = nextBtn.getAttribute('href');
+				return href && href.trim() !== '' && !href.includes('page=') || href;
+			})()
+		`, &hasNextPage),
+	)
+
+	return successfulComplaints, hasNextPage, nil
 }
 
 // FetchComplaintDetails fetches the complaint details from the API
-func FetchComplaintDetails(ctx context.Context, apiID string, complaintNumber string, telegramConfig *TelegramConfig) error {
+// Returns: messageID (empty string if Telegram not configured or failed)
+func FetchComplaintDetails(ctx context.Context, apiID string, complaintNumber string, telegramConfig *TelegramConfig) string {
 	apiURL := fmt.Sprintf("https://complaint.dgvcl.com/api/complaint-record/%s", apiID)
 
 	req, err := http.NewRequestWithContext(ctx, "GET", apiURL, nil)
 	if err != nil {
-		return fmt.Errorf("failed to create request: %w", err)
+		log.Println("  ⚠️  Failed to create request:", err)
+		return ""
 	}
 
 	// Add required headers
@@ -110,20 +161,23 @@ func FetchComplaintDetails(ctx context.Context, apiID string, complaintNumber st
 	// Use the shared HTTP client
 	resp, err := GetHTTPClient().Do(req)
 	if err != nil {
-		return fmt.Errorf("failed to fetch complaint: %w", err)
+		log.Println("  ⚠️  Failed to fetch complaint:", err)
+		return ""
 	}
 	defer resp.Body.Close()
 
 	body, err := io.ReadAll(resp.Body)
 	if err != nil {
-		return fmt.Errorf("failed to read response: %w", err)
+		log.Println("  ⚠️  Failed to read response:", err)
+		return ""
 	}
 
 	// Parse the full JSON response
 	var fullData map[string]interface{}
 	err = json.Unmarshal(body, &fullData)
 	if err != nil {
-		return fmt.Errorf("failed to parse JSON: %w", err)
+		log.Println("  ⚠️  Failed to parse JSON:", err)
+		return ""
 	}
 
 	// Extract complaintdetail and restructure
@@ -137,9 +191,9 @@ func FetchComplaintDetails(ctx context.Context, apiID string, complaintNumber st
 		ExactLocation   interface{} `json:"exact_location"`
 		Area            interface{} `json:"area"`
 	}
-	
+
 	var structuredComplaint StructuredComplaint
-	
+
 	if complaintDetail, ok := fullData["complaintdetail"].(map[string]interface{}); ok {
 		structuredComplaint = StructuredComplaint{
 			ComplainNo:      complaintDetail["complain_no"],
@@ -152,12 +206,14 @@ func FetchComplaintDetails(ctx context.Context, apiID string, complaintNumber st
 			Area:            complaintDetail["area"],
 		}
 	} else {
-		return fmt.Errorf("complaintdetail not found in response")
+		log.Println("  ⚠️  complaintdetail not found in response")
+		return ""
 	}
 
 	prettyJSON, err := json.MarshalIndent(structuredComplaint, "  ", "  ")
 	if err != nil {
-		return fmt.Errorf("failed to format JSON: %w", err)
+		log.Println("  ⚠️  Failed to format JSON:", err)
+		return ""
 	}
 
 	fmt.Println("\n════════════════════════════════════════════════════════")
@@ -167,11 +223,15 @@ func FetchComplaintDetails(ctx context.Context, apiID string, complaintNumber st
 	fmt.Println("════════════════════════════════════════════════════════")
 
 	// Send to Telegram if configured
+	var messageID string
 	if telegramConfig != nil {
-		if err := telegramConfig.SendComplaintMessage(string(prettyJSON), complaintNumber); err != nil {
+		msgID, err := telegramConfig.SendComplaintMessage(string(prettyJSON), complaintNumber)
+		if err != nil {
 			log.Println("⚠️  Failed to send Telegram notification:", err)
+		} else {
+			messageID = msgID
 		}
 	}
 
-	return nil
+	return messageID
 }

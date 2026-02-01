@@ -15,15 +15,15 @@ import (
 )
 
 var (
-	startTime time.Time
-	lastFetchTime time.Time
+	startTime       time.Time
+	lastFetchTime   time.Time
 	lastFetchStatus string
 )
 
 func main() {
 	startTime = time.Now()
 	log.Println("🚀 Starting CMON application...")
-	
+
 	// Load .env file
 	if err := godotenv.Load(); err != nil {
 		log.Println("⚠️  No .env file found or error loading it, reading from environment variables")
@@ -63,14 +63,14 @@ func main() {
 			log.Println("✓ Login successful")
 			break
 		}
-		
+
 		if attempt < cfg.MaxLoginRetries {
 			log.Printf("   ❌ Login failed: %v", loginErr)
 			log.Printf("   ⏳ Retrying in %v...", cfg.LoginRetryDelay)
 			time.Sleep(cfg.LoginRetryDelay)
 		}
 	}
-	
+
 	if loginErr != nil {
 		log.Fatal("❌ Login failed after", cfg.MaxLoginRetries, "attempts:", loginErr)
 	}
@@ -80,10 +80,14 @@ func main() {
 
 	// Initial fetch
 	log.Println("📬 Fetching complaints...")
-	_, err = FetchComplaints(ctx, cfg.ComplaintURL, storage, telegramConfig)
+	newComplaints, err := FetchComplaints(ctx, cfg.ComplaintURL, storage, telegramConfig)
 	if err != nil {
 		log.Fatal("❌ Failed to fetch complaints:", err)
 	}
+
+	// Check for resolved complaints (in case some were resolved since last run)
+	markResolvedComplaints(ctx, storage, telegramConfig, newComplaints)
+
 	lastFetchTime = time.Now()
 	lastFetchStatus = "success"
 
@@ -111,7 +115,7 @@ func main() {
 		case <-ticker.C:
 			log.Println("\n📬 Refreshing complaints list...")
 			log.Println("⏰ Time:", time.Now().Format("2006-01-02 15:04:05"))
-			
+
 			// Attempt to fetch with full retry logic
 			var fetchErr error
 			ctx, cancel, fetchErr = fetchWithRetry(ctx, cancel, cfg.ComplaintURL, storage, telegramConfig, cfg.LoginURL, cfg.Username, cfg.Password)
@@ -123,7 +127,7 @@ func main() {
 				lastFetchTime = time.Now()
 				lastFetchStatus = "success"
 			}
-			
+
 			log.Println("═══════════════════════════════════════════════════════════")
 		}
 	}
@@ -131,28 +135,34 @@ func main() {
 
 // fetchWithRetry implements the complete error handling flow:
 // Fetch fails
-//   ├─ normal error → log & continue
-//   ├─ session expired
-//   │   ├─ re-login succeeds → retry fetch
-//   │   └─ re-login fails
-//   │       ├─ restart browser
-//   │       ├─ re-login again
-//   │       └─ if still fails → Telegram alert
+//
+//	├─ normal error → log & continue
+//	├─ session expired
+//	│   ├─ re-login succeeds → retry fetch
+//	│   └─ re-login fails
+//	│       ├─ restart browser
+//	│       ├─ re-login again
+//	│       └─ if still fails → Telegram alert
+//
 // Returns: (newContext, newCancelFunc, error)
 func fetchWithRetry(ctx context.Context, cancel context.CancelFunc,
 	complaintURL string, storage *ComplaintStorage, telegramConfig *TelegramConfig, loginURL, username, password string) (context.Context, context.CancelFunc, error) {
-	
+
 	// First attempt to fetch
-	newCount, err := FetchComplaints(ctx, complaintURL, storage, telegramConfig)
-	
+	newComplaints, err := FetchComplaints(ctx, complaintURL, storage, telegramConfig)
+
 	if err == nil {
 		// Success!
-		if len(newCount) == 0 {
+		if len(newComplaints) == 0 {
 			log.Println("✓ No new complaints")
 		}
+
+		// Check for resolved complaints
+		markResolvedComplaints(ctx, storage, telegramConfig, newComplaints)
+
 		return ctx, cancel, nil
 	}
-	
+
 	// Check if it's a session expiration error
 	sessionExpired := false
 	if sessionErr, ok := err.(*SessionExpiredError); ok {
@@ -163,101 +173,159 @@ func fetchWithRetry(ctx context.Context, cancel context.CancelFunc,
 		log.Println("⚠️  Error fetching complaints:", err)
 		return ctx, cancel, err
 	}
-	
+
 	// Session expired - attempt re-login
 	if sessionExpired {
 		log.Println("🔐 Attempting re-login...")
 		loginErr := Login(ctx, loginURL, username, password)
-		
+
 		if loginErr == nil {
 			log.Println("✓ Re-login successful, retrying fetch...")
-			
+
 			// Retry fetch after successful re-login
-			newCount, retryErr := FetchComplaints(ctx, complaintURL, storage, telegramConfig)
+			newComplaints, retryErr := FetchComplaints(ctx, complaintURL, storage, telegramConfig)
 			if retryErr == nil {
 				log.Println("✓ Fetch successful after re-login")
-				if len(newCount) == 0 {
+				if len(newComplaints) == 0 {
 					log.Println("✓ No new complaints")
 				}
+
+				// Check for resolved complaints
+				markResolvedComplaints(ctx, storage, telegramConfig, newComplaints)
+
 				return ctx, cancel, nil
 			}
-			
+
 			log.Println("⚠️  Fetch still failed after re-login:", retryErr)
 			return ctx, cancel, retryErr
 		}
-		
+
 		// Re-login failed - restart browser and try again
 		log.Println("❌ Re-login failed:", loginErr)
 		log.Println("🔄 Restarting browser context...")
-		
+
 		// Restart browser context
 		ctx, cancel = RestartBrowserContext(cancel)
-		
+
 		log.Println("🔐 Attempting login after browser restart...")
 		loginErr2 := Login(ctx, loginURL, username, password)
-		
+
 		if loginErr2 == nil {
 			log.Println("✓ Login successful after browser restart, retrying fetch...")
-			
+
 			// Retry fetch after successful re-login
-			newCount, retryErr := FetchComplaints(ctx, complaintURL, storage, telegramConfig)
+			newComplaints, retryErr := FetchComplaints(ctx, complaintURL, storage, telegramConfig)
 			if retryErr == nil {
 				log.Println("✓ Fetch successful after browser restart")
-				if len(newCount) == 0 {
+				if len(newComplaints) == 0 {
 					log.Println("✓ No new complaints")
 				}
+
+				// Check for resolved complaints
+				markResolvedComplaints(ctx, storage, telegramConfig, newComplaints)
+
 				return ctx, cancel, nil
 			}
-			
+
 			log.Println("⚠️  Fetch failed after browser restart:", retryErr)
 			return ctx, cancel, retryErr
 		}
-		
+
 		// All retry attempts failed - send Telegram alert
 		log.Println("❌ All retry attempts failed:", loginErr2)
 		log.Println("🚨 Sending critical failure alert...")
-		
+
 		alertErr := telegramConfig.SendCriticalAlert(
 			"Login Failure After Browser Restart",
 			fmt.Sprintf("Unable to login after browser restart. Last error: %v", loginErr2),
 			3, // Total retry attempts: initial login, re-login, login after restart
 		)
-		
+
 		if alertErr != nil {
 			log.Println("⚠️  Failed to send Telegram alert:", alertErr)
 		}
-		
+
 		return ctx, cancel, fmt.Errorf("all retry attempts failed: %w", loginErr2)
 	}
-	
+
 	return ctx, cancel, err
+}
+
+// markResolvedComplaints checks for complaints that were previously seen
+// but are no longer on the website, and marks them as resolved in Telegram
+func markResolvedComplaints(ctx context.Context, storage *ComplaintStorage, telegramConfig *TelegramConfig, currentComplaints []ComplaintRecord) {
+	// Build a set of current complaint IDs
+	currentIDs := make(map[string]bool)
+	for _, c := range currentComplaints {
+		currentIDs[c.ComplaintID] = true
+	}
+
+	// Get all previously seen complaints
+	allSeen := storage.GetAllSeenComplaints()
+
+	resolvedCount := 0
+	for _, complaintID := range allSeen {
+		// If complaint was seen before but is not in current list, it's resolved
+		if !currentIDs[complaintID] {
+			messageID := storage.GetMessageID(complaintID)
+			if messageID != "" && telegramConfig != nil {
+				log.Printf("✅ Marking complaint %s as resolved", complaintID)
+
+				resolvedMessage := fmt.Sprintf(
+					"<b>✅ RESOLVED</b>\n"+
+						"━━━━━━━━━━━━━━━━━━━━\n\n"+
+						"<s>Complaint No: %s</s>\n"+
+						"<s>This complaint has been resolved.</s>\n"+
+						"━━━━━━━━━━━━━━━━━━━━",
+					complaintID,
+				)
+
+				err := telegramConfig.EditMessageText(telegramConfig.ChatID, messageID, resolvedMessage)
+				if err != nil {
+					log.Printf("⚠️  Failed to edit message for complaint %s: %v", complaintID, err)
+				} else {
+					// Remove from storage after successful edit
+					if rmErr := storage.Remove(complaintID); rmErr != nil {
+						log.Printf("⚠️  Failed to remove complaint %s from storage: %v", complaintID, rmErr)
+					} else {
+						log.Printf("✅ Removed resolved complaint %s from storage", complaintID)
+						resolvedCount++
+					}
+				}
+			}
+		}
+	}
+
+	if resolvedCount > 0 {
+		log.Printf("🎉 Marked %d complaints as resolved", resolvedCount)
+	}
 }
 
 // Health check types and handler
 
 type HealthStatus struct {
-	Status        string    `json:"status"`
-	Uptime        string    `json:"uptime"`
-	LastFetchTime string    `json:"last_fetch_time"`
-	LastFetchStatus string  `json:"last_fetch_status"`
+	Status          string `json:"status"`
+	Uptime          string `json:"uptime"`
+	LastFetchTime   string `json:"last_fetch_time"`
+	LastFetchStatus string `json:"last_fetch_status"`
 }
 
 func startHealthCheckServer(port string) {
 	http.HandleFunc("/health", func(w http.ResponseWriter, r *http.Request) {
 		uptime := time.Since(startTime)
-		
+
 		status := HealthStatus{
-			Status:        "healthy",
-			Uptime:        uptime.String(),
-			LastFetchTime: lastFetchTime.Format("2006-01-02 15:04:05"),
+			Status:          "healthy",
+			Uptime:          uptime.String(),
+			LastFetchTime:   lastFetchTime.Format("2006-01-02 15:04:05"),
 			LastFetchStatus: lastFetchStatus,
 		}
-		
+
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusOK)
 		json.NewEncoder(w).Encode(status)
 	})
-	
+
 	if err := http.ListenAndServe(":"+port, nil); err != nil {
 		log.Printf("⚠️  Health check server error: %v", err)
 	}
