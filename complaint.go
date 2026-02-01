@@ -4,10 +4,10 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"io"
 	"log"
-	"net/http"
+	"time"
 
+	"github.com/chromedp/cdproto/runtime"
 	"github.com/chromedp/chromedp"
 )
 
@@ -49,7 +49,7 @@ func FetchComplaints(ctx context.Context, baseURL string, storage *ComplaintStor
 			log.Printf("  ⚠️  Error scraping page %d: %v", currentPage, err)
 			break
 		}
-		
+
 		allActiveComplaintIDs = append(allActiveComplaintIDs, pageIDs...)
 
 		// 3. Find the URL for the next page
@@ -72,7 +72,6 @@ func FetchComplaints(ctx context.Context, baseURL string, storage *ComplaintStor
 		)
 		if err != nil {
 			log.Printf("  ⚠️  Failed to navigate to next page: %v", err)
-			// If navigation fails, we probably lost session or network
 			break
 		}
 
@@ -117,10 +116,14 @@ func scrapeCurrentPage(ctx context.Context, storage *ComplaintStorage, telegramC
 
 		if storage.IsNew(complaint.ComplaintNumber) {
 			log.Println("    🆕 New Complaint -", complaint.ComplaintNumber)
+
+			// Add delay to prevent rate limiting or race conditions
+			time.Sleep(1 * time.Second)
+
 			messageID := FetchComplaintDetails(ctx, complaint.APIID, complaint.ComplaintNumber, telegramConfig)
-			
+
 			storage.MarkAsSeen(complaint.ComplaintNumber)
-			
+
 			if messageID != "" {
 				newComplaintsToSave = append(newComplaintsToSave, ComplaintRecord{
 					ComplaintID: complaint.ComplaintNumber,
@@ -144,20 +147,16 @@ func scrapeCurrentPage(ctx context.Context, storage *ComplaintStorage, telegramC
 }
 
 // getNextPageURL checks for the next page link and returns the href URL.
-// Returns empty string if no next page is found.
 func getNextPageURL(ctx context.Context) (string, error) {
 	var nextURL string
-	
+
 	err := chromedp.Run(ctx,
 		chromedp.Evaluate(`
 			(function() {
-				// PRIORITY 1: Look for standard pagination link (rel="next")
 				const realNextLink = document.querySelector('a[rel="next"]');
 				if (realNextLink && realNextLink.href) {
 					return realNextLink.href;
 				}
-
-				// PRIORITY 2: Search by text content inside valid pagination items
 				const pageLinks = Array.from(document.querySelectorAll('ul.pagination li:not(.disabled) a.page-link'));
 				for (let link of pageLinks) {
 					const text = link.innerText.trim();
@@ -165,7 +164,6 @@ func getNextPageURL(ctx context.Context) (string, error) {
 						return link.href;
 					}
 				}
-
 				return "";
 			})()
 		`, &nextURL),
@@ -174,35 +172,45 @@ func getNextPageURL(ctx context.Context) (string, error) {
 	return nextURL, err
 }
 
-// FetchComplaintDetails fetches the complaint details from the API
+// FetchComplaintDetails executes a fetch() inside the browser to get details.
+// This ensures cookies/session are reused correctly.
 func FetchComplaintDetails(ctx context.Context, apiID string, complaintNumber string, telegramConfig *TelegramConfig) string {
 	apiURL := fmt.Sprintf("https://complaint.dgvcl.com/api/complaint-record/%s", apiID)
 
-	req, err := http.NewRequestWithContext(ctx, "GET", apiURL, nil)
+	var jsonResponse string
+
+	// MUST use async/await + AwaitPromise here.
+	// A .then() chain returns a pending Promise object to chromedp, which then
+	// tries to unmarshal that object directly into &jsonResponse (a string) and
+	// fails with: "json: cannot unmarshal object into Go value of type string".
+	// WithAwaitPromise(true) tells the CDP Runtime.evaluate to wait for the
+	// Promise to settle and return the resolved string value instead.
+	err := chromedp.Run(ctx,
+		chromedp.Evaluate(fmt.Sprintf(`
+			(async function() {
+				const response = await fetch('%s', {
+					headers: { 'X-Requested-With': 'XMLHttpRequest' }
+				});
+				if (!response.ok) throw new Error('HTTP status ' + response.status);
+				return await response.text();
+			})()
+		`, apiURL), &jsonResponse, func(p *runtime.EvaluateParams) *runtime.EvaluateParams {
+			return p.WithAwaitPromise(true)
+		}),
+	)
+
 	if err != nil {
-		log.Println("  ⚠️  Failed to create request:", err)
+		log.Printf("  ⚠️  Failed to fetch complaint details (Browser API): %v", err)
 		return ""
 	}
 
-	req.Header.Set("Accept", "application/json, text/javascript, */*; q=0.01")
-	req.Header.Set("X-Requested-With", "XMLHttpRequest")
-	req.Header.Set("User-Agent", "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36")
-
-	resp, err := GetHTTPClient().Do(req)
-	if err != nil {
-		log.Println("  ⚠️  Failed to fetch complaint:", err)
-		return ""
-	}
-	defer resp.Body.Close()
-
-	body, err := io.ReadAll(resp.Body)
-	if err != nil {
-		log.Println("  ⚠️  Failed to read response:", err)
+	if jsonResponse == "" {
+		log.Println("  ⚠️  API returned empty response")
 		return ""
 	}
 
 	var fullData map[string]interface{}
-	if err := json.Unmarshal(body, &fullData); err != nil {
+	if err := json.Unmarshal([]byte(jsonResponse), &fullData); err != nil {
 		log.Println("  ⚠️  Failed to parse JSON:", err)
 		return ""
 	}
@@ -232,11 +240,12 @@ func FetchComplaintDetails(ctx context.Context, apiID string, complaintNumber st
 			Area:            complaintDetail["area"],
 		}
 	} else {
+		log.Println("  ⚠️  complaintdetail missing in API response")
 		return ""
 	}
 
 	prettyJSON, _ := json.MarshalIndent(structuredComplaint, "  ", "  ")
-	
+
 	// Send to Telegram
 	if telegramConfig != nil {
 		msgID, err := telegramConfig.SendComplaintMessage(string(prettyJSON), complaintNumber)
