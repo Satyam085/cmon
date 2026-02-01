@@ -22,6 +22,9 @@ type Config struct {
 	LoginRetryDelay time.Duration
 	MaxFetchRetries int
 	
+	// Pagination
+	MaxPages int
+
 	// Timing
 	FetchInterval time.Duration
 	
@@ -49,6 +52,9 @@ func LoadConfig() (*Config, error) {
 		LoginRetryDelay: getEnvDuration("LOGIN_RETRY_DELAY", 5*time.Second),
 		MaxFetchRetries: getEnvInt("MAX_FETCH_RETRIES", 2),
 		
+		// Pagination (Default 5 as requested)
+		MaxPages: getEnvInt("MAX_PAGES", 5),
+
 		// Timing
 		FetchInterval: getEnvDuration("FETCH_INTERVAL", 15*time.Minute),
 		

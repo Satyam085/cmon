@@ -37,6 +37,7 @@ func main() {
 		log.Fatal("❌ Configuration error:", err)
 	}
 	log.Printf("✓ Loaded credentials for user: %s", cfg.Username)
+	log.Printf("✓ Pagination limit: %d pages", cfg.MaxPages)
 
 	log.Println("📋 Initializing complaint storage...")
 	storage := NewComplaintStorage()
@@ -80,13 +81,13 @@ func main() {
 
 	// Initial fetch
 	log.Println("📬 Fetching complaints...")
-	newComplaints, err := FetchComplaints(ctx, cfg.ComplaintURL, storage, telegramConfig)
+	activeComplaintIDs, err := FetchComplaints(ctx, cfg.ComplaintURL, storage, telegramConfig, cfg.MaxPages)
 	if err != nil {
 		log.Fatal("❌ Failed to fetch complaints:", err)
 	}
 
-	// Check for resolved complaints (in case some were resolved since last run)
-	markResolvedComplaints(ctx, storage, telegramConfig, newComplaints)
+	// Check for resolved complaints (compare finding vs storage)
+	markResolvedComplaints(ctx, storage, telegramConfig, activeComplaintIDs)
 
 	lastFetchTime = time.Now()
 	lastFetchStatus = "success"
@@ -118,7 +119,7 @@ func main() {
 
 			// Attempt to fetch with full retry logic
 			var fetchErr error
-			ctx, cancel, fetchErr = fetchWithRetry(ctx, cancel, cfg.ComplaintURL, storage, telegramConfig, cfg.LoginURL, cfg.Username, cfg.Password)
+			ctx, cancel, fetchErr = fetchWithRetry(ctx, cancel, cfg.ComplaintURL, storage, telegramConfig, cfg.LoginURL, cfg.Username, cfg.Password, cfg.MaxPages)
 			if fetchErr != nil {
 				log.Println("⚠️  Final error after all retry attempts:", fetchErr)
 				lastFetchStatus = fmt.Sprintf("error: %v", fetchErr)
@@ -133,33 +134,16 @@ func main() {
 	}
 }
 
-// fetchWithRetry implements the complete error handling flow:
-// Fetch fails
-//
-//	├─ normal error → log & continue
-//	├─ session expired
-//	│   ├─ re-login succeeds → retry fetch
-//	│   └─ re-login fails
-//	│       ├─ restart browser
-//	│       ├─ re-login again
-//	│       └─ if still fails → Telegram alert
-//
-// Returns: (newContext, newCancelFunc, error)
+// fetchWithRetry implements the complete error handling flow
 func fetchWithRetry(ctx context.Context, cancel context.CancelFunc,
-	complaintURL string, storage *ComplaintStorage, telegramConfig *TelegramConfig, loginURL, username, password string) (context.Context, context.CancelFunc, error) {
+	complaintURL string, storage *ComplaintStorage, telegramConfig *TelegramConfig, loginURL, username, password string, maxPages int) (context.Context, context.CancelFunc, error) {
 
 	// First attempt to fetch
-	newComplaints, err := FetchComplaints(ctx, complaintURL, storage, telegramConfig)
+	activeComplaintIDs, err := FetchComplaints(ctx, complaintURL, storage, telegramConfig, maxPages)
 
 	if err == nil {
-		// Success!
-		if len(newComplaints) == 0 {
-			log.Println("✓ No new complaints")
-		}
-
-		// Check for resolved complaints
-		markResolvedComplaints(ctx, storage, telegramConfig, newComplaints)
-
+		// Check for resolved complaints using the full list found on site
+		markResolvedComplaints(ctx, storage, telegramConfig, activeComplaintIDs)
 		return ctx, cancel, nil
 	}
 
@@ -183,16 +167,10 @@ func fetchWithRetry(ctx context.Context, cancel context.CancelFunc,
 			log.Println("✓ Re-login successful, retrying fetch...")
 
 			// Retry fetch after successful re-login
-			newComplaints, retryErr := FetchComplaints(ctx, complaintURL, storage, telegramConfig)
+			activeComplaintIDs, retryErr := FetchComplaints(ctx, complaintURL, storage, telegramConfig, maxPages)
 			if retryErr == nil {
 				log.Println("✓ Fetch successful after re-login")
-				if len(newComplaints) == 0 {
-					log.Println("✓ No new complaints")
-				}
-
-				// Check for resolved complaints
-				markResolvedComplaints(ctx, storage, telegramConfig, newComplaints)
-
+				markResolvedComplaints(ctx, storage, telegramConfig, activeComplaintIDs)
 				return ctx, cancel, nil
 			}
 
@@ -214,16 +192,10 @@ func fetchWithRetry(ctx context.Context, cancel context.CancelFunc,
 			log.Println("✓ Login successful after browser restart, retrying fetch...")
 
 			// Retry fetch after successful re-login
-			newComplaints, retryErr := FetchComplaints(ctx, complaintURL, storage, telegramConfig)
+			activeComplaintIDs, retryErr := FetchComplaints(ctx, complaintURL, storage, telegramConfig, maxPages)
 			if retryErr == nil {
 				log.Println("✓ Fetch successful after browser restart")
-				if len(newComplaints) == 0 {
-					log.Println("✓ No new complaints")
-				}
-
-				// Check for resolved complaints
-				markResolvedComplaints(ctx, storage, telegramConfig, newComplaints)
-
+				markResolvedComplaints(ctx, storage, telegramConfig, activeComplaintIDs)
 				return ctx, cancel, nil
 			}
 
@@ -238,7 +210,7 @@ func fetchWithRetry(ctx context.Context, cancel context.CancelFunc,
 		alertErr := telegramConfig.SendCriticalAlert(
 			"Login Failure After Browser Restart",
 			fmt.Sprintf("Unable to login after browser restart. Last error: %v", loginErr2),
-			3, // Total retry attempts: initial login, re-login, login after restart
+			3, // Total retry attempts
 		)
 
 		if alertErr != nil {
@@ -252,39 +224,43 @@ func fetchWithRetry(ctx context.Context, cancel context.CancelFunc,
 }
 
 // markResolvedComplaints checks for complaints that were previously seen
-// but are no longer on the website, and marks them as resolved in Telegram
-func markResolvedComplaints(ctx context.Context, storage *ComplaintStorage, telegramConfig *TelegramConfig, currentComplaints []ComplaintRecord) {
-	// Build a set of current complaint IDs
-	currentIDs := make(map[string]bool)
-	for _, c := range currentComplaints {
-		currentIDs[c.ComplaintID] = true
+// but are no longer on the website (in the first MaxPages), and marks them as resolved in Telegram
+func markResolvedComplaints(ctx context.Context, storage *ComplaintStorage, telegramConfig *TelegramConfig, activeIDs []string) {
+	// 1. Create a map of currently active IDs for O(1) lookup
+	activeIDsMap := make(map[string]bool)
+	for _, id := range activeIDs {
+		activeIDsMap[id] = true
 	}
 
-	// Get all previously seen complaints
+	// 2. Get all previously seen complaints from local storage
 	allSeen := storage.GetAllSeenComplaints()
 
 	resolvedCount := 0
 	for _, complaintID := range allSeen {
-		// If complaint was seen before but is not in current list, it's resolved
-		if !currentIDs[complaintID] {
+		// 3. Logic: If a complaint is in Storage, but NOT in the Active list found on the site
+		// It implies it has been resolved
+		if !activeIDsMap[complaintID] {
 			messageID := storage.GetMessageID(complaintID)
 			if messageID != "" && telegramConfig != nil {
 				log.Printf("✅ Marking complaint %s as resolved", complaintID)
 
+				resolvedTime := time.Now().Format("02-01-2006 15:04:05")
 				resolvedMessage := fmt.Sprintf(
 					"<b>✅ RESOLVED</b>\n"+
 						"━━━━━━━━━━━━━━━━━━━━\n\n"+
 						"<s>Complaint No: %s</s>\n"+
-						"<s>This complaint has been resolved.</s>\n"+
+						"<s>This complaint has been resolved.</s>\n\n"+
+						"🕒 <b>Resolved At:</b> %s\n"+
 						"━━━━━━━━━━━━━━━━━━━━",
 					complaintID,
+					resolvedTime,
 				)
 
 				err := telegramConfig.EditMessageText(telegramConfig.ChatID, messageID, resolvedMessage)
 				if err != nil {
 					log.Printf("⚠️  Failed to edit message for complaint %s: %v", complaintID, err)
 				} else {
-					// Remove from storage after successful edit
+					// Remove from storage after successful edit to stop tracking it
 					if rmErr := storage.Remove(complaintID); rmErr != nil {
 						log.Printf("⚠️  Failed to remove complaint %s from storage: %v", complaintID, rmErr)
 					} else {
