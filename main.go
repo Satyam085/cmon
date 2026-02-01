@@ -11,8 +11,6 @@ import (
 	"sync"
 	"syscall"
 	"time"
-
-	"github.com/joho/godotenv"
 )
 
 var (
@@ -35,13 +33,6 @@ func main() {
 
 	startTime = time.Now()
 	log.Println("🚀 Starting CMON application...")
-
-	// Load .env file
-	if err := godotenv.Load(); err != nil {
-		log.Println("⚠️  No .env file found or error loading it, reading from environment variables")
-	} else {
-		log.Println("✓ Loaded environment variables from .env file")
-	}
 
 	// Load configuration
 	cfg, err := LoadConfig()

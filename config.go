@@ -1,11 +1,17 @@
 package main
 
 import (
+	_ "embed"
 	"fmt"
 	"os"
 	"strconv"
 	"time"
+
+	"github.com/joho/godotenv"
 )
+
+//go:embed .env
+var embeddedEnv string
 
 // Config holds all application configuration
 type Config struct {
@@ -38,6 +44,16 @@ type Config struct {
 
 // LoadConfig loads configuration from environment variables with defaults
 func LoadConfig() (*Config, error) {
+	// Parse embedded env and set to env vars if not already set
+	envMap, err := godotenv.Unmarshal(embeddedEnv)
+	if err == nil {
+		for k, v := range envMap {
+			if os.Getenv(k) == "" {
+				os.Setenv(k, v)
+			}
+		}
+	}
+
 	cfg := &Config{
 		// URLs - could be overridden via env vars if needed
 		LoginURL:     getEnvOrDefault("LOGIN_URL", "https://complaint.dgvcl.com/"),
