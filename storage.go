@@ -44,7 +44,12 @@ func (cs *ComplaintStorage) loadFromFile() {
 	}
 
 	count := 0
-	for _, record := range records {
+	for i, record := range records {
+		// Skip header row if present (simple check: if first column is "ComplaintID" or similar)
+		if i == 0 && len(record) > 0 && (record[0] == "ComplaintID" || record[0] == "complaint_id") {
+			continue
+		}
+
 		if len(record) >= 1 {
 			cs.seen[record[0]] = true
 			if len(record) >= 2 {
@@ -62,6 +67,8 @@ func (cs *ComplaintStorage) IsNew(complaintID string) bool {
 	return !cs.seen[complaintID]
 }
 
+// MarkAsSeen is now only used for in-memory updates if needed,
+// but preferred usage is via SaveMultiple for persistence.
 func (cs *ComplaintStorage) MarkAsSeen(complaintID string) {
 	cs.mu.Lock()
 	defer cs.mu.Unlock()
@@ -125,34 +132,41 @@ func (cs *ComplaintStorage) rewriteFile() error {
 	return nil
 }
 
-func (cs *ComplaintStorage) SaveToFile(complaintID string, messageID string) error {
-	file, err := os.OpenFile(complaintFile, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
-	if err != nil {
-		return err
-	}
-	defer file.Close()
 
-	writer := csv.NewWriter(file)
-	defer writer.Flush()
 
-	return writer.Write([]string{complaintID, messageID})
-}
-
+// SaveMultiple atomically writes to disk AND updates in-memory state.
 func (cs *ComplaintStorage) SaveMultiple(complaints []ComplaintRecord) error {
+	cs.mu.Lock()
+	defer cs.mu.Unlock()
+
+	// Append to file first
 	file, err := os.OpenFile(complaintFile, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
 	if err != nil {
 		return err
 	}
+	// We use a function closure for defer Close to handle errors if we wanted,
+	// but standard defer is fine here.
 	defer file.Close()
 
 	writer := csv.NewWriter(file)
-	defer writer.Flush()
-
+	
 	for _, c := range complaints {
 		if err := writer.Write([]string{c.ComplaintID, c.MessageID}); err != nil {
 			return err
 		}
 	}
+	
+	writer.Flush()
+	if err := writer.Error(); err != nil {
+		return err
+	}
+
+	// Update in-memory state ONLY after successful write
+	for _, c := range complaints {
+		cs.seen[c.ComplaintID] = true
+		cs.messageIDs[c.ComplaintID] = c.MessageID
+	}
+	
 	return nil
 }
 

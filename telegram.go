@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"io"
 	"log"
-	"net/http"
 	"os"
 	"time"
 )
@@ -43,6 +42,40 @@ func NewTelegramConfig() *TelegramConfig {
 		BotToken: botToken,
 		ChatID:   chatID,
 	}
+}
+
+// doTelegramRequest handles the common logic for sending requests to Telegram API
+func (tc *TelegramConfig) doTelegramRequest(method string, payload interface{}) (map[string]interface{}, error) {
+	jsonData, err := json.Marshal(payload)
+	if err != nil {
+		return nil, fmt.Errorf("failed to marshal payload: %w", err)
+	}
+
+	apiURL := fmt.Sprintf("https://api.telegram.org/bot%s/%s", tc.BotToken, method)
+
+	// Use shared HTTP client
+	resp, err := GetHTTPClient().Post(apiURL, "application/json", bytes.NewBuffer(jsonData))
+	if err != nil {
+		return nil, fmt.Errorf("failed to send request: %w", err)
+	}
+	defer resp.Body.Close()
+
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, fmt.Errorf("failed to read response: %w", err)
+	}
+
+	var result map[string]interface{}
+	err = json.Unmarshal(body, &result)
+	if err != nil {
+		return nil, fmt.Errorf("failed to parse response: %w", err)
+	}
+
+	if ok, exists := result["ok"].(bool); !exists || !ok {
+		return nil, fmt.Errorf("Telegram API error: %v", result)
+	}
+
+	return result, nil
 }
 
 func (tc *TelegramConfig) SendComplaintMessage(complaintJSON string, complaintNumber string) (string, error) {
@@ -100,33 +133,9 @@ func (tc *TelegramConfig) SendComplaintMessage(complaintJSON string, complaintNu
 		DisableWebPagePreview: true,
 	}
 
-	jsonData, err := json.Marshal(telegramMsg)
-	if err != nil {
-		return "", fmt.Errorf("failed to marshal Telegram message: %w", err)
-	}
-
-	apiURL := fmt.Sprintf("https://api.telegram.org/bot%s/sendMessage", tc.BotToken)
-
-	resp, err := http.Post(apiURL, "application/json", bytes.NewBuffer(jsonData))
+	result, err := tc.doTelegramRequest("sendMessage", telegramMsg)
 	if err != nil {
 		return "", fmt.Errorf("failed to send Telegram message: %w", err)
-	}
-	defer resp.Body.Close()
-
-	body, err := io.ReadAll(resp.Body)
-	if err != nil {
-		return "", fmt.Errorf("failed to read Telegram response: %w", err)
-	}
-
-	// Check if response is successful
-	var result map[string]interface{}
-	err = json.Unmarshal(body, &result)
-	if err != nil {
-		return "", fmt.Errorf("failed to parse Telegram response: %w", err)
-	}
-
-	if ok, exists := result["ok"].(bool); !exists || !ok {
-		return "", fmt.Errorf("Telegram API error: %v", result)
 	}
 
 	// Extract message ID from response
@@ -170,32 +179,9 @@ func (tc *TelegramConfig) SendCriticalAlert(errorType, errorMsg string, retryCou
 		DisableWebPagePreview: true,
 	}
 
-	jsonData, err := json.Marshal(telegramMsg)
-	if err != nil {
-		return fmt.Errorf("failed to marshal Telegram alert: %w", err)
-	}
-
-	apiURL := fmt.Sprintf("https://api.telegram.org/bot%s/sendMessage", tc.BotToken)
-
-	resp, err := http.Post(apiURL, "application/json", bytes.NewBuffer(jsonData))
+	_, err := tc.doTelegramRequest("sendMessage", telegramMsg)
 	if err != nil {
 		return fmt.Errorf("failed to send Telegram alert: %w", err)
-	}
-	defer resp.Body.Close()
-
-	body, err := io.ReadAll(resp.Body)
-	if err != nil {
-		return fmt.Errorf("failed to read Telegram response: %w", err)
-	}
-
-	var result map[string]interface{}
-	err = json.Unmarshal(body, &result)
-	if err != nil {
-		return fmt.Errorf("failed to parse Telegram response: %w", err)
-	}
-
-	if ok, exists := result["ok"].(bool); !exists || !ok {
-		return fmt.Errorf("Telegram API error: %v", result)
 	}
 
 	log.Println("   ✓ Critical alert successfully sent to Telegram")
@@ -229,32 +215,9 @@ func (tc *TelegramConfig) EditMessageText(chatID, messageID, newText string) err
 		ParseMode: "HTML",
 	}
 
-	jsonData, err := json.Marshal(req)
-	if err != nil {
-		return fmt.Errorf("failed to marshal edit request: %w", err)
-	}
-
-	apiURL := fmt.Sprintf("https://api.telegram.org/bot%s/editMessageText", tc.BotToken)
-
-	resp, err := http.Post(apiURL, "application/json", bytes.NewBuffer(jsonData))
+	_, err := tc.doTelegramRequest("editMessageText", req)
 	if err != nil {
 		return fmt.Errorf("failed to edit Telegram message: %w", err)
-	}
-	defer resp.Body.Close()
-
-	body, err := io.ReadAll(resp.Body)
-	if err != nil {
-		return fmt.Errorf("failed to read Telegram response: %w", err)
-	}
-
-	var result map[string]interface{}
-	err = json.Unmarshal(body, &result)
-	if err != nil {
-		return fmt.Errorf("failed to parse Telegram response: %w", err)
-	}
-
-	if ok, exists := result["ok"].(bool); !exists || !ok {
-		return fmt.Errorf("Telegram API error: %v", result)
 	}
 
 	log.Println("   ✓ Message successfully edited")

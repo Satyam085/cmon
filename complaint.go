@@ -111,8 +111,17 @@ func scrapeCurrentPage(ctx context.Context, storage *ComplaintStorage, telegramC
 	var allIDsOnPage []string
 	var newComplaintsToSave []ComplaintRecord
 
+	// Local deduplication map to avoid processing duplicates on the same page
+	seenOnPage := make(map[string]bool)
+
 	for _, complaint := range complaintLinks {
 		allIDsOnPage = append(allIDsOnPage, complaint.ComplaintNumber)
+
+		// Skip if we already saw this ID on this page
+		if seenOnPage[complaint.ComplaintNumber] {
+			continue
+		}
+		seenOnPage[complaint.ComplaintNumber] = true
 
 		if storage.IsNew(complaint.ComplaintNumber) {
 			log.Println("    🆕 New Complaint -", complaint.ComplaintNumber)
@@ -122,7 +131,8 @@ func scrapeCurrentPage(ctx context.Context, storage *ComplaintStorage, telegramC
 
 			messageID := FetchComplaintDetails(ctx, complaint.APIID, complaint.ComplaintNumber, telegramConfig)
 
-			storage.MarkAsSeen(complaint.ComplaintNumber)
+			// Don't call MarkAsSeen here anymore. We wait until we have the messageID
+			// and then save everything atomically at the end.
 
 			if messageID != "" {
 				newComplaintsToSave = append(newComplaintsToSave, ComplaintRecord{
@@ -137,9 +147,7 @@ func scrapeCurrentPage(ctx context.Context, storage *ComplaintStorage, telegramC
 		if err := storage.SaveMultiple(newComplaintsToSave); err != nil {
 			log.Println("    ⚠️  Failed to save records:", err)
 		} else {
-			for _, c := range newComplaintsToSave {
-				storage.SetMessageID(c.ComplaintID, c.MessageID)
-			}
+			log.Printf("    ✓ Saved %d new complaints", len(newComplaintsToSave))
 		}
 	}
 

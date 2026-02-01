@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"sync"
 	"syscall"
 	"time"
 
@@ -18,6 +19,7 @@ var (
 	startTime       time.Time
 	lastFetchTime   time.Time
 	lastFetchStatus string
+	stateMu         sync.RWMutex
 )
 
 func main() {
@@ -115,122 +117,127 @@ func main() {
 	defer ticker.Stop()
 
 	// Main loop with graceful shutdown
+	// Main loop with graceful shutdown
 	for {
+		log.Println("\n📬 Refreshing complaints list...")
+		log.Println("⏰ Time:", time.Now().Format("2006-01-02 15:04:05"))
+
+		// Attempt to fetch with full retry logic
+		var fetchErr error
+		ctx, cancel, fetchErr = fetchWithRetry(ctx, cancel, cfg.ComplaintURL, storage, telegramConfig, cfg.LoginURL, cfg.Username, cfg.Password, cfg.MaxPages, cfg.MaxFetchRetries)
+		
+		stateMu.Lock()
+		if fetchErr != nil {
+			log.Println("⚠️  Final error after all retry attempts:", fetchErr)
+			lastFetchStatus = fmt.Sprintf("error: %v", fetchErr)
+			// Continue to next iteration - don't exit the loop
+		} else {
+			lastFetchTime = time.Now()
+			lastFetchStatus = "success"
+		}
+		stateMu.Unlock()
+
+		log.Println("═══════════════════════════════════════════════════════════")
+
+		// Calculate next run time
+		// Using time.After in select to prevent drift/overlap and allow clean shutdown during wait
 		select {
 		case <-shutdownCtx.Done():
 			log.Println("\n🛑 Shutdown signal received, cleaning up...")
 			cancel() // Cancel browser context
 			log.Println("✅ Cleanup complete, shutting down")
 			return
-
-		case <-ticker.C:
-			log.Println("\n📬 Refreshing complaints list...")
-			log.Println("⏰ Time:", time.Now().Format("2006-01-02 15:04:05"))
-
-			// Attempt to fetch with full retry logic
-			var fetchErr error
-			ctx, cancel, fetchErr = fetchWithRetry(ctx, cancel, cfg.ComplaintURL, storage, telegramConfig, cfg.LoginURL, cfg.Username, cfg.Password, cfg.MaxPages)
-			if fetchErr != nil {
-				log.Println("⚠️  Final error after all retry attempts:", fetchErr)
-				lastFetchStatus = fmt.Sprintf("error: %v", fetchErr)
-				// Continue to next iteration - don't exit the loop
-			} else {
-				lastFetchTime = time.Now()
-				lastFetchStatus = "success"
-			}
-
-			log.Println("═══════════════════════════════════════════════════════════")
+		case <-time.After(cfg.FetchInterval):
+			// Continue to next loop iteration
 		}
 	}
 }
 
-// fetchWithRetry implements the complete error handling flow
+// fetchWithRetry implements the complete error handling flow using configuration
 func fetchWithRetry(ctx context.Context, cancel context.CancelFunc,
-	complaintURL string, storage *ComplaintStorage, telegramConfig *TelegramConfig, loginURL, username, password string, maxPages int) (context.Context, context.CancelFunc, error) {
+	complaintURL string, storage *ComplaintStorage, telegramConfig *TelegramConfig, 
+	loginURL, username, password string, maxPages, maxRetries int) (context.Context, context.CancelFunc, error) {
 
-	// First attempt to fetch
-	activeComplaintIDs, err := FetchComplaints(ctx, complaintURL, storage, telegramConfig, maxPages)
+	var lastErr error
 
-	if err == nil {
-		// Check for resolved complaints using the full list found on site
-		markResolvedComplaints(ctx, storage, telegramConfig, activeComplaintIDs)
-		return ctx, cancel, nil
-	}
+	for attempt := 0; attempt <= maxRetries; attempt++ {
+		if attempt > 0 {
+			log.Printf("🔄 Retry attempt %d/%d...", attempt, maxRetries)
+		}
 
-	// Check if it's a session expiration error
-	sessionExpired := false
-	if sessionErr, ok := err.(*SessionExpiredError); ok {
-		log.Println("🔄 Session expired:", sessionErr.Message)
-		sessionExpired = true
-	} else {
-		// Normal error - just log and return
-		log.Println("⚠️  Error fetching complaints:", err)
-		return ctx, cancel, err
-	}
+		// 1. Attempt to fetch
+		activeComplaintIDs, err := FetchComplaints(ctx, complaintURL, storage, telegramConfig, maxPages)
+		if err == nil {
+			// Success!
+			markResolvedComplaints(ctx, storage, telegramConfig, activeComplaintIDs)
+			return ctx, cancel, nil
+		}
+		
+		lastErr = err
 
-	// Session expired - attempt re-login
-	if sessionExpired {
+		// 2. Analyze Error
+		sessionExpired := false
+		if sessionErr, ok := err.(*SessionExpiredError); ok {
+			log.Println("🔄 Session expired:", sessionErr.Message)
+			sessionExpired = true
+		} else {
+			log.Println("⚠️  Error fetching complaints:", err)
+			// If it's not a session error, we still retry, assuming transient network issue?
+			// Or should we only retry on Session Expired?
+			// For now, we'll try to recover from session expiry primarily, 
+			// but maybe a simple timeout also deserves a generic retry.
+			// If it's NOT session expired, we just loop to next attempt (maybe sleep?)
+			// If it IS session expired, we try login flow.
+		}
+
+		if !sessionExpired {
+			// Generic error, wait a bit and retry loop
+			time.Sleep(5 * time.Second)
+			continue
+		}
+
+		// 3. Recovery: Session Expired
 		log.Println("🔐 Attempting re-login...")
 		loginErr := Login(ctx, loginURL, username, password)
 
 		if loginErr == nil {
-			log.Println("✓ Re-login successful, retrying fetch...")
-
-			// Retry fetch after successful re-login
-			activeComplaintIDs, retryErr := FetchComplaints(ctx, complaintURL, storage, telegramConfig, maxPages)
-			if retryErr == nil {
-				log.Println("✓ Fetch successful after re-login")
-				markResolvedComplaints(ctx, storage, telegramConfig, activeComplaintIDs)
-				return ctx, cancel, nil
-			}
-
-			log.Println("⚠️  Fetch still failed after re-login:", retryErr)
-			return ctx, cancel, retryErr
+			log.Println("✓ Re-login successful, retrying fetch on next loop...")
+			continue
 		}
 
-		// Re-login failed - restart browser and try again
+		// 4. Recovery: Login Failed -> Restart Browser
 		log.Println("❌ Re-login failed:", loginErr)
 		log.Println("🔄 Restarting browser context...")
 
-		// Restart browser context
 		ctx, cancel = RestartBrowserContext(cancel)
 
 		log.Println("🔐 Attempting login after browser restart...")
 		loginErr2 := Login(ctx, loginURL, username, password)
-
 		if loginErr2 == nil {
-			log.Println("✓ Login successful after browser restart, retrying fetch...")
-
-			// Retry fetch after successful re-login
-			activeComplaintIDs, retryErr := FetchComplaints(ctx, complaintURL, storage, telegramConfig, maxPages)
-			if retryErr == nil {
-				log.Println("✓ Fetch successful after browser restart")
-				markResolvedComplaints(ctx, storage, telegramConfig, activeComplaintIDs)
-				return ctx, cancel, nil
-			}
-
-			log.Println("⚠️  Fetch failed after browser restart:", retryErr)
-			return ctx, cancel, retryErr
+			log.Println("✓ Login successful after browser restart, retrying fetch on next loop...")
+			continue
 		}
-
-		// All retry attempts failed - send Telegram alert
-		log.Println("❌ All retry attempts failed:", loginErr2)
-		log.Println("🚨 Sending critical failure alert...")
-
-		alertErr := telegramConfig.SendCriticalAlert(
-			"Login Failure After Browser Restart",
-			fmt.Sprintf("Unable to login after browser restart. Last error: %v", loginErr2),
-			3, // Total retry attempts
-		)
-
-		if alertErr != nil {
-			log.Println("⚠️  Failed to send Telegram alert:", alertErr)
-		}
-
-		return ctx, cancel, fmt.Errorf("all retry attempts failed: %w", loginErr2)
+		
+		log.Println("❌ Login failed even after browser restart:", loginErr2)
+		// If even browser restart + login failed, we are in trouble.
+		// We use up one "attempt" of the outer loop.
 	}
 
-	return ctx, cancel, err
+	// All retry attempts failed - send Telegram alert
+	log.Println("❌ All retry attempts failed.")
+	log.Println("🚨 Sending critical failure alert...")
+
+	alertErr := telegramConfig.SendCriticalAlert(
+		"Fetch/Login Failure",
+		fmt.Sprintf("Unable to fetch complaints after %d attempts. Last error: %v", maxRetries, lastErr),
+		maxRetries,
+	)
+
+	if alertErr != nil {
+		log.Println("⚠️  Failed to send Telegram alert:", alertErr)
+	}
+
+	return ctx, cancel, fmt.Errorf("all %d retry attempts failed: %w", maxRetries, lastErr)
 }
 
 // markResolvedComplaints checks for complaints that were previously seen
@@ -298,6 +305,9 @@ type HealthStatus struct {
 
 func startHealthCheckServer(port string) {
 	http.HandleFunc("/health", func(w http.ResponseWriter, r *http.Request) {
+		stateMu.RLock()
+		defer stateMu.RUnlock()
+		
 		uptime := time.Since(startTime)
 
 		status := HealthStatus{
