@@ -6,6 +6,14 @@ import (
 )
 
 func TestComplaintStorage_IsNew(t *testing.T) {
+// Set up test file
+	originalComplaintFile := complaintFile
+	complaintFile = "test_data_" + t.Name() + ".csv"
+	defer func() {
+		os.Remove(complaintFile)
+		complaintFile = originalComplaintFile
+	}()
+
 	storage := NewComplaintStorage()
 
 	// New complaint should return true
@@ -23,6 +31,14 @@ func TestComplaintStorage_IsNew(t *testing.T) {
 }
 
 func TestComplaintStorage_MarkAsSeen(t *testing.T) {
+	// Set up test file
+	originalComplaintFile := complaintFile
+	complaintFile = "test_data_" + t.Name() + ".csv"
+	defer func() {
+		os.Remove(complaintFile)
+		complaintFile = originalComplaintFile
+	}()
+
 	storage := NewComplaintStorage()
 
 	complaintID := "CP002"
@@ -42,13 +58,13 @@ func TestComplaintStorage_MarkAsSeen(t *testing.T) {
 }
 
 func TestComplaintStorage_SaveMultiple(t *testing.T) {
-	// Create temp file for testing
-	tmpFile := "test_complaints.csv"
-	defer os.Remove(tmpFile)
-
-	// Temporarily change the complaint file constant
-	// Note: This is a limitation of the current design -
-	// ideally complaintFile should be configurable
+	// Set up test file
+	originalComplaintFile := complaintFile
+	complaintFile = "test_data_" + t.Name() + ".csv"
+	defer func() {
+		os.Remove(complaintFile)
+		complaintFile = originalComplaintFile
+	}()
 
 	storage := NewComplaintStorage()
 
@@ -65,6 +81,14 @@ func TestComplaintStorage_SaveMultiple(t *testing.T) {
 }
 
 func TestComplaintStorage_Concurrency(t *testing.T) {
+	// Set up test file
+	originalComplaintFile := complaintFile
+	complaintFile = "test_data_" + t.Name() + ".csv"
+	defer func() {
+		os.Remove(complaintFile)
+		complaintFile = originalComplaintFile
+	}()
+
 	storage := NewComplaintStorage()
 
 	// Test concurrent access

@@ -7,7 +7,7 @@ import (
 	"sync"
 )
 
-const complaintFile = "complaints.csv"
+var complaintFile = "complaints.csv"
 
 type ComplaintStorage struct {
 	mu         sync.Mutex

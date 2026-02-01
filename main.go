@@ -108,20 +108,28 @@ func main() {
 	defer ticker.Stop()
 
 	// Main loop with graceful shutdown
-	// Main loop with graceful shutdown
 	for {
+		select {
+		case <-shutdownCtx.Done():
+			log.Println("\n🛑 Shutdown signal received, cleaning up...")
+			cancel() // Cancel browser context
+			log.Println("✅ Cleanup complete, shutting down")
+			return
+		case <-ticker.C:
+			// Fall through to execution logic below
+		}
+
 		log.Println("\n📬 Refreshing complaints list...")
 		log.Println("⏰ Time:", time.Now().Format("2006-01-02 15:04:05"))
 
 		// Attempt to fetch with full retry logic
 		var fetchErr error
-		ctx, cancel, fetchErr = fetchWithRetry(ctx, cancel, cfg.ComplaintURL, storage, telegramConfig, cfg.LoginURL, cfg.Username, cfg.Password, cfg.MaxPages, cfg.MaxFetchRetries)
+		ctx, cancel, fetchErr = fetchWithRetry(ctx, cancel, cfg.ComplaintURL, storage, telegramConfig, cfg.LoginURL, cfg.Username, cfg.Password, cfg.MaxPages, cfg.MaxFetchRetries, cfg.FetchTimeout)
 		
 		stateMu.Lock()
 		if fetchErr != nil {
 			log.Println("⚠️  Final error after all retry attempts:", fetchErr)
 			lastFetchStatus = fmt.Sprintf("error: %v", fetchErr)
-			// Continue to next iteration - don't exit the loop
 		} else {
 			lastFetchTime = time.Now()
 			lastFetchStatus = "success"
@@ -129,25 +137,13 @@ func main() {
 		stateMu.Unlock()
 
 		log.Println("═══════════════════════════════════════════════════════════")
-
-		// Calculate next run time
-		// Using time.After in select to prevent drift/overlap and allow clean shutdown during wait
-		select {
-		case <-shutdownCtx.Done():
-			log.Println("\n🛑 Shutdown signal received, cleaning up...")
-			cancel() // Cancel browser context
-			log.Println("✅ Cleanup complete, shutting down")
-			return
-		case <-time.After(cfg.FetchInterval):
-			// Continue to next loop iteration
-		}
 	}
 }
 
 // fetchWithRetry implements the complete error handling flow using configuration
 func fetchWithRetry(ctx context.Context, cancel context.CancelFunc,
 	complaintURL string, storage *ComplaintStorage, telegramConfig *TelegramConfig, 
-	loginURL, username, password string, maxPages, maxRetries int) (context.Context, context.CancelFunc, error) {
+	loginURL, username, password string, maxPages, maxRetries int, fetchTimeout time.Duration) (context.Context, context.CancelFunc, error) {
 
 	var lastErr error
 
@@ -156,8 +152,13 @@ func fetchWithRetry(ctx context.Context, cancel context.CancelFunc,
 			log.Printf("🔄 Retry attempt %d/%d...", attempt, maxRetries)
 		}
 
-		// 1. Attempt to fetch
-		activeComplaintIDs, err := FetchComplaints(ctx, complaintURL, storage, telegramConfig, maxPages)
+		// 1. Attempt to fetch with timeout
+		// Create a child context with timeout for this specific fetch attempt
+		fetchCtx, fetchCancel := context.WithTimeout(ctx, fetchTimeout)
+		
+		activeComplaintIDs, err := FetchComplaints(fetchCtx, complaintURL, storage, telegramConfig, maxPages)
+		fetchCancel() // Always cancel the timeout context when done
+
 		if err == nil {
 			// Success!
 			markResolvedComplaints(ctx, storage, telegramConfig, activeComplaintIDs)

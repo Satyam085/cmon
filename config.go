@@ -33,6 +33,7 @@ type Config struct {
 
 	// Timing
 	FetchInterval time.Duration
+	FetchTimeout  time.Duration
 	
 	// Telegram
 	TelegramBotToken string
@@ -73,6 +74,7 @@ func LoadConfig() (*Config, error) {
 
 		// Timing
 		FetchInterval: getEnvDuration("FETCH_INTERVAL", 15*time.Minute),
+		FetchTimeout:  getEnvDuration("FETCH_TIMEOUT", 10*time.Minute),
 		
 		// Telegram
 		TelegramBotToken: os.Getenv("TELEGRAM_BOT_TOKEN"),

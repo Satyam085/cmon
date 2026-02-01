@@ -11,6 +11,10 @@ func TestLoadConfig(t *testing.T) {
 	origUsername := os.Getenv("DGVCL_USERNAME")
 	origPassword := os.Getenv("DGVCL_PASSWORD")
 	
+	// Save original embeddedEnv and clear it
+	origEmbeddedEnv := embeddedEnv
+	embeddedEnv = ""
+	
 	// Clean up after test
 	defer func() {
 		if origUsername != "" {
@@ -19,6 +23,7 @@ func TestLoadConfig(t *testing.T) {
 		if origPassword != "" {
 			os.Setenv("DGVCL_PASSWORD", origPassword)
 		}
+		embeddedEnv = origEmbeddedEnv
 	}()
 	
 	// Test missing required fields
