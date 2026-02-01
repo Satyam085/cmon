@@ -70,25 +70,36 @@ func (tc *TelegramConfig) SendComplaintMessage(complaintJSON string, complaintNu
 	}
 
 	// Format the message in a user-friendly way
-	message := fmt.Sprintf(
-		"<b>🆕 NEW COMPLAINT</b>\n\n" +
-		"<b>Complaint Number:</b> %s\n" +
-		"<b>Consumer Number:</b> %s\n" +
-		"<b>Complainant Name:</b> %s\n" +
-		"<b>Mobile Number:</b> %s\n" +
-		"<b>Complaint Date:</b> %s\n\n" +
-		"<b>Description:</b>\n%s\n\n" +
-		"<b>Location:</b> %s\n" +
-		"<b>Area:</b> %s",
-		getValue("complain_no"),
-		getValue("consumer_no"),
-		getValue("complainant_name"),
-		getValue("mobile_no"),
-		getValue("complain_date"),
-		getValue("description"),
-		getValue("exact_location"),
-		getValue("area"),
-	)
+// Prettified Telegram message (HTML)
+message := fmt.Sprintf(
+	"<b>New Complaint Received</b>\n"+
+	"──────────────────────────\n\n"+
+
+	"<b>📄 Complaint Details</b>\n"+
+	"<b>• Complaint No:</b> %s\n"+
+	"<b>• Consumer No:</b> %s\n"+
+	"<b>• Complaint Date:</b> %s\n\n"+
+
+	"<b>👤 Complainant Information</b>\n"+
+	"<b>• Name:</b> %s\n"+
+	"<b>• Mobile:</b> %s\n\n"+
+
+	"<b>📝 Complaint Description</b>\n"+
+	"%s\n\n"+
+
+	"<b>📍 Location Details</b>\n"+
+	"<b>• Exact Location:</b> %s\n"+
+	"<b>• Area:</b> %s\n\n"+
+
+	getValue("complain_no"),
+	getValue("consumer_no"),
+	getValue("complain_date"),
+	getValue("complainant_name"),
+	getValue("mobile_no"),
+	getValue("description"),
+	getValue("exact_location"),
+	getValue("area"),
+)
 
 	telegramMsg := TelegramMessage{
 		ChatID:                tc.ChatID,
