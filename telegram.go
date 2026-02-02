@@ -9,6 +9,7 @@ import (
 	"log"
 	"net/http"
 	"os"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -16,9 +17,10 @@ import (
 
 // PendingResolution stores information about a complaint awaiting resolution note
 type PendingResolution struct {
-	ComplaintNumber string
-	MessageID       string
-	OriginalText    string
+	ComplaintNumber  string
+	MessageID        string
+	OriginalText     string
+	PromptMessageID  int    // ID of the prompt message to delete after user responds
 }
 
 type TelegramConfig struct {
@@ -35,6 +37,7 @@ type TelegramMessage struct {
 	ParseMode             string      `json:"parse_mode"`
 	DisableWebPagePreview bool        `json:"disable_web_page_preview"`
 	ReplyMarkup           interface{} `json:"reply_markup,omitempty"`
+	ReplyToMessageID      int         `json:"reply_to_message_id,omitempty"` // For threading messages
 }
 
 // InlineKeyboardMarkup represents an inline keyboard
@@ -437,27 +440,56 @@ func (tc *TelegramConfig) handleCallbackQuery(ctx context.Context, query *Callba
 
 	log.Printf("📝 Requesting resolution note for complaint %s from %s\n", complaintNumber, query.From.FirstName)
 
+	// Extract consumer name from original text
+	consumerName := "Unknown"
+	if idx := strings.Index(originalText, "👤 "); idx != -1 {
+		nameStart := idx + len("👤 ")
+		if newlineIdx := strings.Index(originalText[nameStart:], "\n"); newlineIdx != -1 {
+			consumerName = originalText[nameStart : nameStart+newlineIdx]
+		}
+	}
+
 	// Send message asking for resolution note with ForceReply
+	// Reply to the original complaint message to keep conversation threaded
+	originalMessageID, _ := strconv.Atoi(messageID)
 	promptMsg := TelegramMessage{
-		ChatID:    tc.ChatID,
-		Text:      fmt.Sprintf("📝 Please send the resolution note for complaint <b>%s</b>:", complaintNumber),
-		ParseMode: "HTML",
+		ChatID:           tc.ChatID,
+		Text:             fmt.Sprintf("📝 Remarks for complaint <b>%s</b>\n👤 %s:", complaintNumber, consumerName),
+		ParseMode:        "HTML",
+		ReplyToMessageID: originalMessageID, // Thread reply to original complaint
 		ReplyMarkup: &ForceReply{
 			ForceReply:            true,
 			InputFieldPlaceholder: "Enter resolution details...",
 		},
 	}
 
-	_, err := tc.doTelegramRequest("sendMessage", promptMsg)
+	// Send prompt message
+	result, err := tc.doTelegramRequest("sendMessage", promptMsg)
 	if err != nil {
 		log.Printf("⚠️  Failed to send prompt message: %v\n", err)
 		tc.answerCallbackQuery(query.ID, "Error sending prompt")
 		return
 	}
+	
+	// Extract actual prompt message ID from the response
+	var promptMsgID int
+	if msgResult, ok := result["result"].(map[string]interface{}); ok {
+		if msgID, ok := msgResult["message_id"].(float64); ok {
+			promptMsgID = int(msgID)
+		}
+	}
+	
+	// Update pending resolution with actual prompt message ID
+	tc.mu.Lock()
+	if pending, exists := tc.pendingResolutions[query.From.ID]; exists {
+		pending.PromptMessageID = promptMsgID
+		tc.pendingResolutions[query.From.ID] = pending
+	}
+	tc.mu.Unlock()
 
 	// Answer the callback query
-	tc.answerCallbackQuery(query.ID, "Please send your resolution note")
-	log.Printf("✓ Prompted %s for resolution note\n", query.From.FirstName)
+	tc.answerCallbackQuery(query.ID, "Please send your remarks")
+	log.Printf("✓ Prompted %s for remarks\n", query.From.FirstName)
 }
 
 // handleMessage processes regular text messages (for resolution notes)
@@ -473,9 +505,26 @@ func (tc *TelegramConfig) handleMessage(ctx context.Context, browserCtx context.
 		tc.mu.Unlock()
 		return // No pending resolution for this user
 	}
+	
+	// Store prompt message ID before removing from pending
+	promptMsgID := pending.PromptMessageID
+	
 	// Remove from pending immediately
 	delete(tc.pendingResolutions, message.From.ID)
 	tc.mu.Unlock()
+
+	// Delete the prompt message to keep chat clean
+	if promptMsgID > 0 {
+		deleteReq := struct {
+			ChatID    string `json:"chat_id"`
+			MessageID int    `json:"message_id"`
+		}{
+			ChatID:    tc.ChatID,
+			MessageID: promptMsgID,
+		}
+		tc.doTelegramRequest("deleteMessage", deleteReq)
+		// Ignore errors - message might already be deleted
+	}
 
 	log.Printf("📝 Received resolution note from %s for complaint %s\n", message.From.FirstName, pending.ComplaintNumber)
 
@@ -520,11 +569,24 @@ func (tc *TelegramConfig) handleMessage(ctx context.Context, browserCtx context.
 
 	log.Printf("✅ Successfully marked complaint %s as resolved on website\n", pending.ComplaintNumber)
 
-	// Create minimal resolved message - just complaint number and resolved status
+	// Extract consumer name from original text (format: "👤 Name\n")
+	consumerName := "Unknown"
+	if idx := strings.Index(pending.OriginalText, "👤 "); idx != -1 {
+		nameStart := idx + len("👤 ")
+		if newlineIdx := strings.Index(pending.OriginalText[nameStart:], "\n"); newlineIdx != -1 {
+			consumerName = pending.OriginalText[nameStart : nameStart+newlineIdx]
+		}
+	}
+
+	// Create minimal resolved message - complaint number, consumer name, and resolved status
 	resolvedMessage := fmt.Sprintf(
 		"✅ <b>RESOLVED</b>\n\n"+
-			"Complaint #%s",
+			"Complaint #%s\n"+
+			"👤 %s\n"+
+			"🕐 %s",
 		pending.ComplaintNumber,
+		consumerName,
+		time.Now().Format("02 Jan 2006, 03:04 PM"),
 	)
 
 	// Remove the button when marking as resolved

@@ -265,17 +265,22 @@ func markResolvedComplaints(ctx context.Context, storage *ComplaintStorage, tele
 			if messageID != "" && telegramConfig != nil {
 				log.Printf("✅ Marking complaint %s as resolved", complaintID)
 
-				resolvedTime := time.Now().Format("02-01-2006 15:04:05")
+				// Get consumer name from storage
+				consumerName := storage.GetConsumerName(complaintID)
+				if consumerName == "" {
+					consumerName = "Unknown"
+				}
+
 				resolvedMessage := fmt.Sprintf(
-					"<b>✅ RESOLVED</b>\n"+
-						"━━━━━━━━━━━━━━━━━━━━\n\n"+
-						"<s>Complaint No: %s</s>\n"+
-						"<s>This complaint has been resolved.</s>\n\n"+
-						"🕒 <b>Resolved At:</b> %s\n"+
-						"━━━━━━━━━━━━━━━━━━━━",
+					"✅ <b>RESOLVED</b>\n\n"+
+						"Complaint #%s\n"+
+						"👤 %s\n"+
+						"🕐 %s",
 					complaintID,
-					resolvedTime,
+					consumerName,
+					time.Now().Format("02 Jan 2006, 03:04 PM"),
 				)
+				
 
 				err := telegramConfig.EditMessageText(telegramConfig.ChatID, messageID, resolvedMessage)
 				if err != nil {

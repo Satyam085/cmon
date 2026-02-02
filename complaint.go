@@ -154,16 +154,17 @@ func scrapeCurrentPage(ctx context.Context, storage *ComplaintStorage, telegramC
 			// Add delay to prevent rate limiting or race conditions
 			time.Sleep(1 * time.Second)
 
-			messageID := FetchComplaintDetails(ctx, complaint.APIID, complaint.ComplaintNumber, telegramConfig)
+			messageID, consumerName := FetchComplaintDetails(ctx, complaint.APIID, complaint.ComplaintNumber, telegramConfig)
 
 			// Don't call MarkAsSeen here anymore. We wait until we have the messageID
 			// and then save everything atomically at the end.
 
 			if messageID != "" {
 				newComplaintsToSave = append(newComplaintsToSave, ComplaintRecord{
-					ComplaintID: complaint.ComplaintNumber,
-					MessageID:   messageID,
-					APIID:       complaint.APIID,
+					ComplaintID:  complaint.ComplaintNumber,
+					MessageID:    messageID,
+					APIID:        complaint.APIID,
+					ConsumerName: consumerName,
 				})
 			}
 		}
@@ -208,7 +209,8 @@ func getNextPageURL(ctx context.Context) (string, error) {
 
 // FetchComplaintDetails executes a fetch() inside the browser to get details.
 // This ensures cookies/session are reused correctly.
-func FetchComplaintDetails(ctx context.Context, apiID string, complaintNumber string, telegramConfig *TelegramConfig) string {
+// Returns (messageID, consumerName)
+func FetchComplaintDetails(ctx context.Context, apiID string, complaintNumber string, telegramConfig *TelegramConfig) (string, string) {
 	apiURL := fmt.Sprintf("https://complaint.dgvcl.com/api/complaint-record/%s", apiID)
 
 	var jsonResponse string
@@ -235,18 +237,18 @@ func FetchComplaintDetails(ctx context.Context, apiID string, complaintNumber st
 
 	if err != nil {
 		log.Printf("  ⚠️  Failed to fetch complaint details (Browser API): %v", err)
-		return ""
+		return "", ""
 	}
 
 	if jsonResponse == "" {
 		log.Println("  ⚠️  API returned empty response")
-		return ""
+		return "", ""
 	}
 
 	var fullData map[string]interface{}
 	if err := json.Unmarshal([]byte(jsonResponse), &fullData); err != nil {
 		log.Println("  ⚠️  Failed to parse JSON:", err)
-		return ""
+		return "", ""
 	}
 
 	// Extract complaintdetail
@@ -275,7 +277,13 @@ func FetchComplaintDetails(ctx context.Context, apiID string, complaintNumber st
 		}
 	} else {
 		log.Println("  ⚠️  complaintdetail missing in API response")
-		return ""
+		return "", ""
+	}
+
+	// Extract consumer name
+	consumerName := "Unknown"
+	if structuredComplaint.ComplainantName != nil {
+		consumerName = fmt.Sprintf("%v", structuredComplaint.ComplainantName)
 	}
 
 	prettyJSON, _ := json.MarshalIndent(structuredComplaint, "  ", "  ")
@@ -284,10 +292,10 @@ func FetchComplaintDetails(ctx context.Context, apiID string, complaintNumber st
 	if telegramConfig != nil {
 		msgID, err := telegramConfig.SendComplaintMessage(string(prettyJSON), complaintNumber)
 		if err == nil {
-			return msgID
+			return msgID, consumerName
 		}
 		log.Println("⚠️  Failed to send Telegram notification:", err)
 	}
 
-	return ""
+	return "", ""
 }

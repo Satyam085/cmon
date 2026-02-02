@@ -10,17 +10,19 @@ import (
 var complaintFile = "complaints.csv"
 
 type ComplaintStorage struct {
-	mu         sync.Mutex
-	seen       map[string]bool
-	messageIDs map[string]string // complaintID -> Telegram message ID
-	apiIDs     map[string]string // complaintID -> API ID (for resolving on website)
+	mu            sync.Mutex
+	seen          map[string]bool
+	messageIDs    map[string]string // complaintID -> Telegram message ID
+	apiIDs        map[string]string // complaintID -> API ID (for resolving on website)
+	consumerNames map[string]string // complaintID -> Consumer Name
 }
 
 func NewComplaintStorage() *ComplaintStorage {
 	cs := &ComplaintStorage{
-		seen:       make(map[string]bool),
-		messageIDs: make(map[string]string),
-		apiIDs:     make(map[string]string),
+		seen:          make(map[string]bool),
+		messageIDs:    make(map[string]string),
+		apiIDs:        make(map[string]string),
+		consumerNames: make(map[string]string),
 	}
 	cs.loadFromFile()
 	return cs
@@ -60,6 +62,9 @@ func (cs *ComplaintStorage) loadFromFile() {
 			if len(record) >= 3 {
 				cs.apiIDs[record[0]] = record[2]
 			}
+			if len(record) >= 4 {
+				cs.consumerNames[record[0]] = record[3]
+			}
 			count++
 		}
 	}
@@ -98,6 +103,12 @@ func (cs *ComplaintStorage) GetAPIID(complaintID string) string {
 	return cs.apiIDs[complaintID]
 }
 
+func (cs *ComplaintStorage) GetConsumerName(complaintID string) string {
+	cs.mu.Lock()
+	defer cs.mu.Unlock()
+	return cs.consumerNames[complaintID]
+}
+
 // ExistsInStorage checks if a complaint exists in storage
 func (cs *ComplaintStorage) ExistsInStorage(complaintID string) bool {
 	cs.mu.Lock()
@@ -120,6 +131,7 @@ func (cs *ComplaintStorage) RemoveIfExists(complaintID string) (bool, error) {
 	delete(cs.seen, complaintID)
 	delete(cs.messageIDs, complaintID)
 	delete(cs.apiIDs, complaintID)
+	delete(cs.consumerNames, complaintID)
 
 	// Rewrite CSV file without the removed complaint
 	return true, cs.rewriteFile()
@@ -143,6 +155,7 @@ func (cs *ComplaintStorage) Remove(complaintID string) error {
 	delete(cs.seen, complaintID)
 	delete(cs.messageIDs, complaintID)
 	delete(cs.apiIDs, complaintID)
+	delete(cs.consumerNames, complaintID)
 
 	// Rewrite CSV file without the removed complaint
 	return cs.rewriteFile()
@@ -167,6 +180,11 @@ func (cs *ComplaintStorage) rewriteFile() error {
 		}
 		if apiID, ok := cs.apiIDs[id]; ok {
 			record = append(record, apiID)
+		} else {
+			record = append(record, "")
+		}
+		if consumerName, ok := cs.consumerNames[id]; ok {
+			record = append(record, consumerName)
 		} else {
 			record = append(record, "")
 		}
@@ -197,7 +215,7 @@ func (cs *ComplaintStorage) SaveMultiple(complaints []ComplaintRecord) error {
 	writer := csv.NewWriter(file)
 	
 	for _, c := range complaints {
-		if err := writer.Write([]string{c.ComplaintID, c.MessageID, c.APIID}); err != nil {
+		if err := writer.Write([]string{c.ComplaintID, c.MessageID, c.APIID, c.ConsumerName}); err != nil {
 			return err
 		}
 	}
@@ -212,13 +230,15 @@ func (cs *ComplaintStorage) SaveMultiple(complaints []ComplaintRecord) error {
 		cs.seen[c.ComplaintID] = true
 		cs.messageIDs[c.ComplaintID] = c.MessageID
 		cs.apiIDs[c.ComplaintID] = c.APIID
+		cs.consumerNames[c.ComplaintID] = c.ConsumerName
 	}
 	
 	return nil
 }
 
 type ComplaintRecord struct {
-	ComplaintID string
-	MessageID   string
-	APIID       string
+	ComplaintID  string
+	MessageID    string
+	APIID        string
+	ConsumerName string
 }
