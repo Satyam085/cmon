@@ -62,7 +62,7 @@ func main() {
 	var loginErr error
 	for attempt := 1; attempt <= cfg.MaxLoginRetries; attempt++ {
 		log.Printf("   Login attempt %d/%d...", attempt, cfg.MaxLoginRetries)
-		loginErr = Login(ctx, cfg.LoginURL, cfg.Username, cfg.Password, cfg)
+		loginErr = Login(ctx, cfg.LoginURL, cfg.Username, cfg.Password)
 		if loginErr == nil {
 			log.Println("✓ Login successful")
 			break
@@ -190,7 +190,7 @@ func fetchWithRetry(ctx context.Context, cancel context.CancelFunc,
 
 		// 3. Recovery: Session Expired
 		log.Println("🔐 Attempting re-login...")
-		loginErr := Login(ctx, loginURL, username, password, cfg)
+		loginErr := Login(ctx, loginURL, username, password)
 
 		if loginErr == nil {
 			log.Println("✓ Re-login successful, retrying fetch on next loop...")
@@ -204,7 +204,7 @@ func fetchWithRetry(ctx context.Context, cancel context.CancelFunc,
 		ctx, cancel = RestartBrowserContext(cancel)
 
 		log.Println("🔐 Attempting login after browser restart...")
-		loginErr2 := Login(ctx, loginURL, username, password, cfg)
+		loginErr2 := Login(ctx, loginURL, username, password)
 		if loginErr2 == nil {
 			log.Println("✓ Login successful after browser restart, retrying fetch on next loop...")
 			continue

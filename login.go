@@ -11,23 +11,17 @@ import (
 	"github.com/chromedp/chromedp"
 )
 
-func Login(ctx context.Context, loginURL, username, password string, cfg *Config) error {
+func Login(ctx context.Context, loginURL, username, password string) error {
 	log.Println("  → Navigating to login page...")
 	var captchaText string
 
-	// Navigate and wait for page with a single timeout context
-	// Using NavigationTimeout + WaitTimeout for the combined operation
-	loginTimeout := cfg.NavigationTimeout + cfg.WaitTimeout
-	loginCtx, loginCancel := context.WithTimeout(ctx, loginTimeout)
-	err := chromedp.Run(loginCtx,
+	err := chromedp.Run(ctx,
 		chromedp.Navigate(loginURL),
 		chromedp.WaitVisible("body", chromedp.ByQuery),
 		chromedp.Text("li.captchaList span", &captchaText, chromedp.NodeVisible),
 	)
-	loginCancel()
-	
 	if err != nil {
-		log.Printf("  ✗ Login page load timeout/error after %v: %v", loginTimeout, err)
+		log.Println("  ✗ Failed to load login page:", err)
 		return NewLoginFailedError("failed to load login page", err)
 	}
 	log.Println("  ✓ Login page loaded")
