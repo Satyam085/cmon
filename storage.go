@@ -98,6 +98,33 @@ func (cs *ComplaintStorage) GetAPIID(complaintID string) string {
 	return cs.apiIDs[complaintID]
 }
 
+// ExistsInStorage checks if a complaint exists in storage
+func (cs *ComplaintStorage) ExistsInStorage(complaintID string) bool {
+	cs.mu.Lock()
+	defer cs.mu.Unlock()
+	return cs.seen[complaintID]
+}
+
+// RemoveIfExists atomically checks if complaint exists and removes it
+// Returns true if complaint was removed, false if it didn't exist
+func (cs *ComplaintStorage) RemoveIfExists(complaintID string) (bool, error) {
+	cs.mu.Lock()
+	defer cs.mu.Unlock()
+
+	// Check if complaint exists
+	if !cs.seen[complaintID] {
+		return false, nil // Already removed
+	}
+
+	// Remove from in-memory maps
+	delete(cs.seen, complaintID)
+	delete(cs.messageIDs, complaintID)
+	delete(cs.apiIDs, complaintID)
+
+	// Rewrite CSV file without the removed complaint
+	return true, cs.rewriteFile()
+}
+
 func (cs *ComplaintStorage) GetAllSeenComplaints() []string {
 	cs.mu.Lock()
 	defer cs.mu.Unlock()

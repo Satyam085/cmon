@@ -352,7 +352,7 @@ func (tc *TelegramConfig) answerCallbackQuery(callbackQueryID string, text strin
 }
 
 // HandleUpdates listens for incoming updates and processes callback queries
-func (tc *TelegramConfig) HandleUpdates(ctx context.Context, browserCtx context.Context, storage *ComplaintStorage) {
+func (tc *TelegramConfig) HandleUpdates(ctx context.Context, ctxHolder *BrowserContextHolder, storage *ComplaintStorage) {
 	if tc == nil {
 		log.Println("⚠️  Telegram not configured, callback handler disabled")
 		return
@@ -378,7 +378,7 @@ func (tc *TelegramConfig) HandleUpdates(ctx context.Context, browserCtx context.
 				if update.CallbackQuery != nil {
 					tc.handleCallbackQuery(ctx, update.CallbackQuery, storage)
 				} else if update.Message != nil {
-					tc.handleMessage(ctx, browserCtx, update.Message, storage)
+					tc.handleMessage(ctx, ctxHolder.Get(), update.Message, storage)
 				}
 				offset = update.UpdateID + 1
 			}
@@ -470,6 +470,18 @@ func (tc *TelegramConfig) handleMessage(ctx context.Context, browserCtx context.
 
 	log.Printf("📝 Received resolution note from %s for complaint %s\n", message.From.FirstName, pending.ComplaintNumber)
 
+	// Check if complaint still exists in storage (may have been auto-resolved)
+	if !storage.ExistsInStorage(pending.ComplaintNumber) {
+		log.Printf("⚠️  Complaint %s was already resolved (possibly auto-resolved from website)\n", pending.ComplaintNumber)
+		errorMsg := TelegramMessage{
+			ChatID:    tc.ChatID,
+			Text:      fmt.Sprintf("ℹ️ Complaint <b>%s</b> was already resolved.", pending.ComplaintNumber),
+			ParseMode: "HTML",
+		}
+		tc.doTelegramRequest("sendMessage", errorMsg)
+		return
+	}
+
 	// Get API ID for this complaint
 	apiID := storage.GetAPIID(pending.ComplaintNumber)
 	if apiID == "" {
@@ -499,17 +511,11 @@ func (tc *TelegramConfig) handleMessage(ctx context.Context, browserCtx context.
 
 	log.Printf("✅ Successfully marked complaint %s as resolved on website\n", pending.ComplaintNumber)
 
-	// Create resolved message with resolution note
+	// Create minimal resolved message - just complaint number and resolved status
 	resolvedMessage := fmt.Sprintf(
-		"✅ <b>RESOLVED</b> ✅\n\n"+
-			"%s\n\n"+
-			"<b>Resolution Note:</b>\n<pre>%s</pre>\n\n"+
-			"<i>Resolved by: %s\n"+
-			"Resolved at: %s</i>",
-		pending.OriginalText,
-		message.Text,
-		message.From.FirstName,
-		time.Now().Format("2006-01-02 15:04:05"),
+		"✅ <b>RESOLVED</b>\n\n"+
+			"Complaint #%s",
+		pending.ComplaintNumber,
 	)
 
 	// Remove the button when marking as resolved
@@ -534,19 +540,13 @@ func (tc *TelegramConfig) handleMessage(ctx context.Context, browserCtx context.
 		return
 	}
 
-	// Remove from storage and CSV
-	err = storage.Remove(pending.ComplaintNumber)
+	// Remove from storage and CSV atomically
+	removed, err := storage.RemoveIfExists(pending.ComplaintNumber)
 	if err != nil {
 		log.Printf("⚠️  Failed to remove from storage: %v\n", err)
+	} else if !removed {
+		log.Printf("ℹ️  Complaint %s was already removed from storage (concurrent resolution)\n", pending.ComplaintNumber)
 	}
-
-	// Send confirmation message
-	confirmMsg := TelegramMessage{
-		ChatID:    tc.ChatID,
-		Text:      fmt.Sprintf("✅ Complaint <b>%s</b> has been marked as resolved both on the website and in Telegram!", pending.ComplaintNumber),
-		ParseMode: "HTML",
-	}
-	tc.doTelegramRequest("sendMessage", confirmMsg)
 
 	log.Printf("✓ Successfully resolved complaint %s with note\n", pending.ComplaintNumber)
 }

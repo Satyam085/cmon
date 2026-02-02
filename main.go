@@ -54,8 +54,8 @@ func main() {
 	log.Printf("✓ Health check server started on :%s", cfg.HealthCheckPort)
 
 	log.Println("🌐 Initializing browser context...")
-	ctx, cancel := NewBrowserContext()
-	defer cancel()
+	ctxHolder := NewBrowserContextHolder()
+	defer ctxHolder.Cancel()
 	log.Println("✓ Browser context created")
 
 	// Start Telegram callback handler if Telegram is configured
@@ -64,7 +64,7 @@ func main() {
 		callbackCtx, callbackCancel := context.WithCancel(context.Background())
 		defer callbackCancel()
 		
-		go telegramConfig.HandleUpdates(callbackCtx, ctx, storage)
+		go telegramConfig.HandleUpdates(callbackCtx, ctxHolder, storage)
 		log.Println("✓ Telegram callback handler started")
 	}
 
@@ -73,7 +73,7 @@ func main() {
 	var loginErr error
 	for attempt := 1; attempt <= cfg.MaxLoginRetries; attempt++ {
 		log.Printf("   Login attempt %d/%d...", attempt, cfg.MaxLoginRetries)
-		loginErr = Login(ctx, cfg.LoginURL, cfg.Username, cfg.Password)
+		loginErr = Login(ctxHolder.Get(), cfg.LoginURL, cfg.Username, cfg.Password)
 		if loginErr == nil {
 			log.Println("✓ Login successful")
 			break
@@ -95,13 +95,13 @@ func main() {
 
 	// Initial fetch
 	log.Println("📬 Fetching complaints...")
-	activeComplaintIDs, err := FetchComplaints(ctx, cfg.ComplaintURL, storage, telegramConfig, cfg)
+	activeComplaintIDs, err := FetchComplaints(ctxHolder.Get(), cfg.ComplaintURL, storage, telegramConfig, cfg)
 	if err != nil {
 		log.Fatal("❌ Failed to fetch complaints:", err)
 	}
 
 	// Check for resolved complaints (compare finding vs storage)
-	markResolvedComplaints(ctx, storage, telegramConfig, activeComplaintIDs)
+	markResolvedComplaints(ctxHolder.Get(), storage, telegramConfig, activeComplaintIDs)
 
 	lastFetchTime = time.Now()
 	lastFetchStatus = "success"
@@ -123,7 +123,7 @@ func main() {
 		select {
 		case <-shutdownCtx.Done():
 			log.Println("\n🛑 Shutdown signal received, cleaning up...")
-			cancel() // Cancel browser context
+			ctxHolder.Cancel() // Cancel browser context
 			log.Println("✅ Cleanup complete, shutting down")
 			return
 		case <-ticker.C:
@@ -135,7 +135,7 @@ func main() {
 
 		// Attempt to fetch with full retry logic
 		var fetchErr error
-		ctx, cancel, fetchErr = fetchWithRetry(ctx, cancel, cfg.ComplaintURL, storage, telegramConfig, cfg.LoginURL, cfg.Username, cfg.Password, cfg, cfg.MaxFetchRetries, cfg.FetchTimeout)
+		fetchErr = fetchWithRetry(ctxHolder, cfg.ComplaintURL, storage, telegramConfig, cfg.LoginURL, cfg.Username, cfg.Password, cfg, cfg.MaxFetchRetries, cfg.FetchTimeout)
 		
 		stateMu.Lock()
 		if fetchErr != nil {
@@ -152,9 +152,9 @@ func main() {
 }
 
 // fetchWithRetry implements the complete error handling flow using configuration
-func fetchWithRetry(ctx context.Context, cancel context.CancelFunc,
+func fetchWithRetry(ctxHolder *BrowserContextHolder,
 	complaintURL string, storage *ComplaintStorage, telegramConfig *TelegramConfig, 
-	loginURL, username, password string, cfg *Config, maxRetries int, fetchTimeout time.Duration) (context.Context, context.CancelFunc, error) {
+	loginURL, username, password string, cfg *Config, maxRetries int, fetchTimeout time.Duration) error {
 
 	var lastErr error
 
@@ -165,15 +165,15 @@ func fetchWithRetry(ctx context.Context, cancel context.CancelFunc,
 
 		// 1. Attempt to fetch with timeout
 		// Create a child context with timeout for this specific fetch attempt
-		fetchCtx, fetchCancel := context.WithTimeout(ctx, fetchTimeout)
+		fetchCtx, fetchCancel := context.WithTimeout(ctxHolder.Get(), fetchTimeout)
 		
 		activeComplaintIDs, err := FetchComplaints(fetchCtx, complaintURL, storage, telegramConfig, cfg)
 		fetchCancel() // Always cancel the timeout context when done
 
 		if err == nil {
 			// Success!
-			markResolvedComplaints(ctx, storage, telegramConfig, activeComplaintIDs)
-			return ctx, cancel, nil
+			markResolvedComplaints(ctxHolder.Get(), storage, telegramConfig, activeComplaintIDs)
+			return nil
 		}
 		
 		lastErr = err
@@ -201,7 +201,7 @@ func fetchWithRetry(ctx context.Context, cancel context.CancelFunc,
 
 		// 3. Recovery: Session Expired
 		log.Println("🔐 Attempting re-login...")
-		loginErr := Login(ctx, loginURL, username, password)
+		loginErr := Login(ctxHolder.Get(), loginURL, username, password)
 
 		if loginErr == nil {
 			log.Println("✓ Re-login successful, retrying fetch on next loop...")
@@ -212,10 +212,11 @@ func fetchWithRetry(ctx context.Context, cancel context.CancelFunc,
 		log.Println("❌ Re-login failed:", loginErr)
 		log.Println("🔄 Restarting browser context...")
 
-		ctx, cancel = RestartBrowserContext(cancel)
+		newCtx, newCancel := NewBrowserContext()
+		ctxHolder.Set(newCtx, newCancel)
 
 		log.Println("🔐 Attempting login after browser restart...")
-		loginErr2 := Login(ctx, loginURL, username, password)
+		loginErr2 := Login(ctxHolder.Get(), loginURL, username, password)
 		if loginErr2 == nil {
 			log.Println("✓ Login successful after browser restart, retrying fetch on next loop...")
 			continue
@@ -240,7 +241,7 @@ func fetchWithRetry(ctx context.Context, cancel context.CancelFunc,
 		log.Println("⚠️  Failed to send Telegram alert:", alertErr)
 	}
 
-	return ctx, cancel, fmt.Errorf("all %d retry attempts failed: %w", maxRetries, lastErr)
+	return fmt.Errorf("all %d retry attempts failed: %w", maxRetries, lastErr)
 }
 
 // markResolvedComplaints checks for complaints that were previously seen
