@@ -31,11 +31,26 @@ jobs:
           restore-keys: |
             ${{ runner.os }}-go-
 
+      - name: Create .env file
+        run: |
+          cat << EOF > .env
+          DGVCL_USERNAME=${{ secrets.DGVCL_USERNAME }}
+          DGVCL_PASSWORD=${{ secrets.DGVCL_PASSWORD }}
+          TELEGRAM_BOT_TOKEN=${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID=${{ secrets.TELEGRAM_CHAT_ID }}
+          EOF
+
       - name: Build Windows AMD64
         env:
           GOOS: windows
           GOARCH: amd64
-        run: go build -v -o cmon-windows-amd64.exe .
+        run: go build -v -ldflags="-s -w" -o cmon-windows-amd64.exe .
+
+      - name: Build Linux AMD64
+        env:
+          GOOS: linux
+          GOARCH: amd64
+        run: go build -v -ldflags="-s -w" -o cmon-linux-amd64 .
 
       - name: Build Linux ARM64 (Termux)
         env:
@@ -48,4 +63,5 @@ jobs:
         with:
           files: |
             cmon-windows-amd64.exe
+            cmon-linux-amd64
             cmon-linux-arm64
