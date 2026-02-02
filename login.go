@@ -15,27 +15,20 @@ func Login(ctx context.Context, loginURL, username, password string, cfg *Config
 	log.Println("  → Navigating to login page...")
 	var captchaText string
 
-	// Navigate with timeout
-	navCtx, navCancel := context.WithTimeout(ctx, cfg.NavigationTimeout)
-	err := chromedp.Run(navCtx, chromedp.Navigate(loginURL))
-	navCancel()
-	
-	if err != nil {
-		log.Printf("  ✗ Navigation timeout/error after %v: %v", cfg.NavigationTimeout, err)
-		return NewLoginFailedError("failed to navigate to login page", err)
-	}
-	
-	// Wait for page and get captcha with timeout
-	waitCtx, waitCancel := context.WithTimeout(ctx, cfg.WaitTimeout)
-	err = chromedp.Run(waitCtx,
+	// Navigate and wait for page with a single timeout context
+	// Using NavigationTimeout + WaitTimeout for the combined operation
+	loginTimeout := cfg.NavigationTimeout + cfg.WaitTimeout
+	loginCtx, loginCancel := context.WithTimeout(ctx, loginTimeout)
+	err := chromedp.Run(loginCtx,
+		chromedp.Navigate(loginURL),
 		chromedp.WaitVisible("body", chromedp.ByQuery),
 		chromedp.Text("li.captchaList span", &captchaText, chromedp.NodeVisible),
 	)
-	waitCancel()
+	loginCancel()
 	
 	if err != nil {
-		log.Printf("  ✗ Wait/captcha timeout/error after %v: %v", cfg.WaitTimeout, err)
-		return NewLoginFailedError("failed to load login page or get captcha", err)
+		log.Printf("  ✗ Login page load timeout/error after %v: %v", loginTimeout, err)
+		return NewLoginFailedError("failed to load login page", err)
 	}
 	log.Println("  ✓ Login page loaded")
 

@@ -77,8 +77,8 @@ func LoadConfig() (*Config, error) {
 		// Timing
 		FetchInterval:     getEnvDuration("FETCH_INTERVAL", 15*time.Minute),
 		FetchTimeout:      getEnvDuration("FETCH_TIMEOUT", 10*time.Minute),
-		NavigationTimeout: getEnvDuration("NAVIGATION_TIMEOUT", 30*time.Second),
-		WaitTimeout:       getEnvDuration("WAIT_TIMEOUT", 20*time.Second),
+		NavigationTimeout: getEnvDuration("NAVIGATION_TIMEOUT", 60*time.Second),
+		WaitTimeout:       getEnvDuration("WAIT_TIMEOUT", 45*time.Second),
 		
 		// Telegram
 		TelegramBotToken: os.Getenv("TELEGRAM_BOT_TOKEN"),
