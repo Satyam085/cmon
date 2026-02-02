@@ -18,26 +18,41 @@ type ComplaintLink struct {
 }
 
 // FetchComplaints orchestrates the fetching of complaints.
-func FetchComplaints(ctx context.Context, baseURL string, storage *ComplaintStorage, telegramConfig *TelegramConfig, maxPages int) ([]string, error) {
+func FetchComplaints(ctx context.Context, baseURL string, storage *ComplaintStorage, telegramConfig *TelegramConfig, cfg *Config) ([]string, error) {
 	var allActiveComplaintIDs []string
 
 	log.Println("  → Navigating to complaints dashboard...")
-	// 1. Initial Navigation
-	if err := chromedp.Run(ctx,
-		chromedp.Navigate(baseURL),
-		chromedp.WaitVisible("#dataTable", chromedp.ByID),
-	); err != nil {
+	// 1. Initial Navigation with timeout
+	navCtx, navCancel := context.WithTimeout(ctx, cfg.NavigationTimeout)
+	err := chromedp.Run(navCtx, chromedp.Navigate(baseURL))
+	navCancel()
+	
+	if err != nil {
+		log.Printf("  ✗ Navigation timeout/error after %v: %v", cfg.NavigationTimeout, err)
+		if IsSessionExpired(ctx) {
+			return nil, NewSessionExpiredError("dashboard navigation failed")
+		}
+		return nil, NewFetchError("failed to navigate to dashboard", err)
+	}
+	
+	// Wait for table to be visible with separate timeout
+	waitCtx, waitCancel := context.WithTimeout(ctx, cfg.WaitTimeout)
+	err = chromedp.Run(waitCtx, chromedp.WaitVisible("#dataTable", chromedp.ByID))
+	waitCancel()
+	
+	if err != nil {
+		log.Printf("  ✗ Wait timeout/error after %v: %v", cfg.WaitTimeout, err)
 		if IsSessionExpired(ctx) {
 			return nil, NewSessionExpiredError("dashboard not visible")
 		}
-		return nil, NewFetchError("failed to load dashboard", err)
+		return nil, NewFetchError("failed to load dashboard table", err)
 	}
 	log.Println("  ✓ Dashboard loaded")
 
 	currentPage := 1
 	for {
-		if currentPage > maxPages {
-			log.Printf("🛑 Reached maximum page limit (%d). Stopping.", maxPages)
+		if currentPage > cfg.MaxPages {
+			log.Printf("🛑 Reached maximum page limit (%d). Stopping.", cfg.MaxPages)
 			break
 		}
 
@@ -64,14 +79,24 @@ func FetchComplaints(ctx context.Context, baseURL string, storage *ComplaintStor
 			break
 		}
 
-		// 4. Navigate to the next page explicitly
+		// 4. Navigate to the next page explicitly with timeout
 		log.Printf("  → Navigating to next page...")
-		err = chromedp.Run(ctx,
-			chromedp.Navigate(nextURL),
-			chromedp.WaitVisible("#dataTable", chromedp.ByID),
-		)
+		navCtx, navCancel := context.WithTimeout(ctx, cfg.NavigationTimeout)
+		err = chromedp.Run(navCtx, chromedp.Navigate(nextURL))
+		navCancel()
+		
 		if err != nil {
-			log.Printf("  ⚠️  Failed to navigate to next page: %v", err)
+			log.Printf("  ⚠️  Navigation timeout/error after %v: %v", cfg.NavigationTimeout, err)
+			break
+		}
+		
+		// Wait for table with timeout
+		waitCtx, waitCancel := context.WithTimeout(ctx, cfg.WaitTimeout)
+		err = chromedp.Run(waitCtx, chromedp.WaitVisible("#dataTable", chromedp.ByID))
+		waitCancel()
+		
+		if err != nil {
+			log.Printf("  ⚠️  Wait timeout/error after %v: %v", cfg.WaitTimeout, err)
 			break
 		}
 

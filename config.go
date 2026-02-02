@@ -32,8 +32,10 @@ type Config struct {
 	MaxPages int
 
 	// Timing
-	FetchInterval time.Duration
-	FetchTimeout  time.Duration
+	FetchInterval     time.Duration
+	FetchTimeout      time.Duration
+	NavigationTimeout time.Duration
+	WaitTimeout       time.Duration
 	
 	// Telegram
 	TelegramBotToken string
@@ -73,8 +75,10 @@ func LoadConfig() (*Config, error) {
 		MaxPages: getEnvInt("MAX_PAGES", 5),
 
 		// Timing
-		FetchInterval: getEnvDuration("FETCH_INTERVAL", 15*time.Minute),
-		FetchTimeout:  getEnvDuration("FETCH_TIMEOUT", 10*time.Minute),
+		FetchInterval:     getEnvDuration("FETCH_INTERVAL", 15*time.Minute),
+		FetchTimeout:      getEnvDuration("FETCH_TIMEOUT", 10*time.Minute),
+		NavigationTimeout: getEnvDuration("NAVIGATION_TIMEOUT", 30*time.Second),
+		WaitTimeout:       getEnvDuration("WAIT_TIMEOUT", 20*time.Second),
 		
 		// Telegram
 		TelegramBotToken: os.Getenv("TELEGRAM_BOT_TOKEN"),

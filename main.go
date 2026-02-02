@@ -62,7 +62,7 @@ func main() {
 	var loginErr error
 	for attempt := 1; attempt <= cfg.MaxLoginRetries; attempt++ {
 		log.Printf("   Login attempt %d/%d...", attempt, cfg.MaxLoginRetries)
-		loginErr = Login(ctx, cfg.LoginURL, cfg.Username, cfg.Password)
+		loginErr = Login(ctx, cfg.LoginURL, cfg.Username, cfg.Password, cfg)
 		if loginErr == nil {
 			log.Println("✓ Login successful")
 			break
@@ -84,7 +84,7 @@ func main() {
 
 	// Initial fetch
 	log.Println("📬 Fetching complaints...")
-	activeComplaintIDs, err := FetchComplaints(ctx, cfg.ComplaintURL, storage, telegramConfig, cfg.MaxPages)
+	activeComplaintIDs, err := FetchComplaints(ctx, cfg.ComplaintURL, storage, telegramConfig, cfg)
 	if err != nil {
 		log.Fatal("❌ Failed to fetch complaints:", err)
 	}
@@ -124,7 +124,7 @@ func main() {
 
 		// Attempt to fetch with full retry logic
 		var fetchErr error
-		ctx, cancel, fetchErr = fetchWithRetry(ctx, cancel, cfg.ComplaintURL, storage, telegramConfig, cfg.LoginURL, cfg.Username, cfg.Password, cfg.MaxPages, cfg.MaxFetchRetries, cfg.FetchTimeout)
+		ctx, cancel, fetchErr = fetchWithRetry(ctx, cancel, cfg.ComplaintURL, storage, telegramConfig, cfg.LoginURL, cfg.Username, cfg.Password, cfg, cfg.MaxFetchRetries, cfg.FetchTimeout)
 		
 		stateMu.Lock()
 		if fetchErr != nil {
@@ -143,7 +143,7 @@ func main() {
 // fetchWithRetry implements the complete error handling flow using configuration
 func fetchWithRetry(ctx context.Context, cancel context.CancelFunc,
 	complaintURL string, storage *ComplaintStorage, telegramConfig *TelegramConfig, 
-	loginURL, username, password string, maxPages, maxRetries int, fetchTimeout time.Duration) (context.Context, context.CancelFunc, error) {
+	loginURL, username, password string, cfg *Config, maxRetries int, fetchTimeout time.Duration) (context.Context, context.CancelFunc, error) {
 
 	var lastErr error
 
@@ -156,7 +156,7 @@ func fetchWithRetry(ctx context.Context, cancel context.CancelFunc,
 		// Create a child context with timeout for this specific fetch attempt
 		fetchCtx, fetchCancel := context.WithTimeout(ctx, fetchTimeout)
 		
-		activeComplaintIDs, err := FetchComplaints(fetchCtx, complaintURL, storage, telegramConfig, maxPages)
+		activeComplaintIDs, err := FetchComplaints(fetchCtx, complaintURL, storage, telegramConfig, cfg)
 		fetchCancel() // Always cancel the timeout context when done
 
 		if err == nil {
@@ -190,7 +190,7 @@ func fetchWithRetry(ctx context.Context, cancel context.CancelFunc,
 
 		// 3. Recovery: Session Expired
 		log.Println("🔐 Attempting re-login...")
-		loginErr := Login(ctx, loginURL, username, password)
+		loginErr := Login(ctx, loginURL, username, password, cfg)
 
 		if loginErr == nil {
 			log.Println("✓ Re-login successful, retrying fetch on next loop...")
@@ -204,7 +204,7 @@ func fetchWithRetry(ctx context.Context, cancel context.CancelFunc,
 		ctx, cancel = RestartBrowserContext(cancel)
 
 		log.Println("🔐 Attempting login after browser restart...")
-		loginErr2 := Login(ctx, loginURL, username, password)
+		loginErr2 := Login(ctx, loginURL, username, password, cfg)
 		if loginErr2 == nil {
 			log.Println("✓ Login successful after browser restart, retrying fetch on next loop...")
 			continue
