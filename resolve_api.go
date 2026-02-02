@@ -11,7 +11,7 @@ import (
 )
 
 // ResolveComplaintOnWebsite marks a complaint as resolved on the DGVCL website using the browser context
-func ResolveComplaintOnWebsite(ctx context.Context, apiID string, remark string) error {
+func ResolveComplaintOnWebsite(ctx context.Context, apiID string, remark string, debugMode bool) error {
 	apiURL := "https://complaint.dgvcl.com/api/complaint-assign-process"
 	
 	// URL encode the remark
@@ -21,6 +21,15 @@ func ResolveComplaintOnWebsite(ctx context.Context, apiID string, remark string)
 	requestBody := fmt.Sprintf("complaint_id=%s&complaint_AsignType=resolved&remark=%s", apiID, encodedRemark)
 	
 	log.Printf("  → Marking complaint %s as resolved on website...\n", apiID)
+	
+	// Debug mode: Just log instead of making API call
+	if debugMode {
+		log.Printf("  🐛 DEBUG MODE: Skipping API call\n")
+		log.Printf("  🐛 Would call: %s\n", apiURL)
+		log.Printf("  🐛 With body: %s\n", requestBody)
+		log.Printf("  ✓ [DEBUG] Simulated successful resolution\n")
+		return nil
+	}
 	
 	var responseText string
 	err := chromedp.Run(ctx,

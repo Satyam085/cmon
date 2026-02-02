@@ -43,6 +43,9 @@ type Config struct {
 	
 	// Health check
 	HealthCheckPort string
+	
+	// Debug mode - skip API calls for testing
+	DebugMode bool
 }
 
 // LoadConfig loads configuration from environment variables with defaults
@@ -86,6 +89,9 @@ func LoadConfig() (*Config, error) {
 		
 		// Health check
 		HealthCheckPort: getEnvOrDefault("HEALTH_CHECK_PORT", "8080"),
+		
+		// Debug mode
+		DebugMode: getEnvOrDefault("DEBUG_MODE", "false") == "true",
 	}
 	
 	if err := cfg.Validate(); err != nil {

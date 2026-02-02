@@ -22,10 +22,11 @@ type PendingResolution struct {
 }
 
 type TelegramConfig struct {
-	BotToken            string
-	ChatID              string
-	mu                  sync.Mutex
+	BotToken           string
+	ChatID             string
+	mu                 sync.Mutex
 	pendingResolutions map[int64]PendingResolution // userID -> pending resolution
+	DebugMode          bool                        // Skip API calls in debug mode
 }
 
 type TelegramMessage struct {
@@ -106,10 +107,18 @@ func NewTelegramConfig() *TelegramConfig {
 	}
 
 	log.Println("✓ Telegram configured successfully")
+	
+	// Get debug mode from environment
+	debugMode := os.Getenv("DEBUG_MODE") == "true"
+	if debugMode {
+		log.Println("🐛 DEBUG MODE ENABLED - API calls will be simulated")
+	}
+	
 	return &TelegramConfig{
 		BotToken:           botToken,
 		ChatID:             chatID,
 		pendingResolutions: make(map[int64]PendingResolution),
+		DebugMode:          debugMode,
 	}
 }
 
@@ -497,7 +506,7 @@ func (tc *TelegramConfig) handleMessage(ctx context.Context, browserCtx context.
 
 	// Call the API to mark complaint as resolved on the website
 	log.Printf("🌐 Calling DGVCL API to mark complaint %s as resolved...\n", pending.ComplaintNumber)
-	err := ResolveComplaintOnWebsite(browserCtx, apiID, message.Text)
+	err := ResolveComplaintOnWebsite(browserCtx, apiID, message.Text, tc.DebugMode)
 	if err != nil {
 		log.Printf("⚠️  Failed to mark complaint on website: %v\n", err)
 		errorMsg := TelegramMessage{
