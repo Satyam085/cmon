@@ -11,6 +11,7 @@ import (
 	"sync"
 	"syscall"
 	"time"
+ "time/tzdata"
 )
 
 var (
