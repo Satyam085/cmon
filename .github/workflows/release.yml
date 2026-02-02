@@ -38,6 +38,12 @@ jobs:
           DGVCL_PASSWORD=${{ secrets.DGVCL_PASSWORD }}
           TELEGRAM_BOT_TOKEN=${{ secrets.TELEGRAM_BOT_TOKEN }}
           TELEGRAM_CHAT_ID=${{ secrets.TELEGRAM_CHAT_ID }}
+          MAX_LOGIN_RETRIES=3
+          MAX_FETCH_RETRIES=2
+          FETCH_TICKER_INTERVAL=15m
+          SESSION_CHECK_ENABLED=true
+          NAVIGATION_TIMEOUT=300s
+          WAIT_TIMEOUT=300s
           EOF
 
       - name: Build Windows AMD64
