@@ -13,12 +13,14 @@ type ComplaintStorage struct {
 	mu         sync.Mutex
 	seen       map[string]bool
 	messageIDs map[string]string // complaintID -> Telegram message ID
+	apiIDs     map[string]string // complaintID -> API ID (for resolving on website)
 }
 
 func NewComplaintStorage() *ComplaintStorage {
 	cs := &ComplaintStorage{
 		seen:       make(map[string]bool),
 		messageIDs: make(map[string]string),
+		apiIDs:     make(map[string]string),
 	}
 	cs.loadFromFile()
 	return cs
@@ -55,6 +57,9 @@ func (cs *ComplaintStorage) loadFromFile() {
 			if len(record) >= 2 {
 				cs.messageIDs[record[0]] = record[1]
 			}
+			if len(record) >= 3 {
+				cs.apiIDs[record[0]] = record[2]
+			}
 			count++
 		}
 	}
@@ -87,6 +92,12 @@ func (cs *ComplaintStorage) SetMessageID(complaintID, messageID string) {
 	cs.messageIDs[complaintID] = messageID
 }
 
+func (cs *ComplaintStorage) GetAPIID(complaintID string) string {
+	cs.mu.Lock()
+	defer cs.mu.Unlock()
+	return cs.apiIDs[complaintID]
+}
+
 func (cs *ComplaintStorage) GetAllSeenComplaints() []string {
 	cs.mu.Lock()
 	defer cs.mu.Unlock()
@@ -104,6 +115,7 @@ func (cs *ComplaintStorage) Remove(complaintID string) error {
 	// Remove from in-memory maps
 	delete(cs.seen, complaintID)
 	delete(cs.messageIDs, complaintID)
+	delete(cs.apiIDs, complaintID)
 
 	// Rewrite CSV file without the removed complaint
 	return cs.rewriteFile()
@@ -123,6 +135,13 @@ func (cs *ComplaintStorage) rewriteFile() error {
 		record := []string{id}
 		if msgID, ok := cs.messageIDs[id]; ok {
 			record = append(record, msgID)
+		} else {
+			record = append(record, "")
+		}
+		if apiID, ok := cs.apiIDs[id]; ok {
+			record = append(record, apiID)
+		} else {
+			record = append(record, "")
 		}
 		if err := writer.Write(record); err != nil {
 			return err
@@ -151,7 +170,7 @@ func (cs *ComplaintStorage) SaveMultiple(complaints []ComplaintRecord) error {
 	writer := csv.NewWriter(file)
 	
 	for _, c := range complaints {
-		if err := writer.Write([]string{c.ComplaintID, c.MessageID}); err != nil {
+		if err := writer.Write([]string{c.ComplaintID, c.MessageID, c.APIID}); err != nil {
 			return err
 		}
 	}
@@ -165,6 +184,7 @@ func (cs *ComplaintStorage) SaveMultiple(complaints []ComplaintRecord) error {
 	for _, c := range complaints {
 		cs.seen[c.ComplaintID] = true
 		cs.messageIDs[c.ComplaintID] = c.MessageID
+		cs.apiIDs[c.ComplaintID] = c.APIID
 	}
 	
 	return nil
@@ -173,4 +193,5 @@ func (cs *ComplaintStorage) SaveMultiple(complaints []ComplaintRecord) error {
 type ComplaintRecord struct {
 	ComplaintID string
 	MessageID   string
+	APIID       string
 }

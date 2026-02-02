@@ -11,7 +11,7 @@ import (
 	"sync"
 	"syscall"
 	"time"
-_ "time/tzdata"
+	_ "time/tzdata"
 )
 
 var (
@@ -57,6 +57,16 @@ func main() {
 	ctx, cancel := NewBrowserContext()
 	defer cancel()
 	log.Println("✓ Browser context created")
+
+	// Start Telegram callback handler if Telegram is configured
+	if telegramConfig != nil {
+		// Create a context for the callback handler
+		callbackCtx, callbackCancel := context.WithCancel(context.Background())
+		defer callbackCancel()
+		
+		go telegramConfig.HandleUpdates(callbackCtx, ctx, storage)
+		log.Println("✓ Telegram callback handler started")
+	}
 
 	// Login with retry logic
 	log.Println("🔐 Attempting to login...")

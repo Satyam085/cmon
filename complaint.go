@@ -163,6 +163,7 @@ func scrapeCurrentPage(ctx context.Context, storage *ComplaintStorage, telegramC
 				newComplaintsToSave = append(newComplaintsToSave, ComplaintRecord{
 					ComplaintID: complaint.ComplaintNumber,
 					MessageID:   messageID,
+					APIID:       complaint.APIID,
 				})
 			}
 		}
