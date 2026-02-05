@@ -1,3 +1,5 @@
 .env
+internal/config/.env
 complaints.csv
 build
+.vscode
