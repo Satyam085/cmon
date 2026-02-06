@@ -600,6 +600,29 @@ func (c *Client) handleCallbackQuery(ctx context.Context, query *CallbackQuery, 
 
 	// Store pending resolution
 	c.mu.Lock()
+	// Check if resolution is already pending for this user and complaint (Toggle logic)
+	if pending, exists := c.pendingResolutions[query.From.ID]; exists && pending.ComplaintNumber == complaintNumber {
+		// User clicked button again -> CANCEL action
+		delete(c.pendingResolutions, query.From.ID)
+		c.mu.Unlock()
+
+		// Delete the previous prompt message
+		if pending.PromptMessageID > 0 {
+			deleteReq := struct {
+				ChatID    string `json:"chat_id"`
+				MessageID int    `json:"message_id"`
+			}{
+				ChatID:    c.ChatID,
+				MessageID: pending.PromptMessageID,
+			}
+			c.doRequest("deleteMessage", deleteReq)
+		}
+
+		c.answerCallbackQuery(query.ID, "Resolution cancelled")
+		log.Printf("❌ Resolution cancelled by toggle for user %s\n", query.From.FirstName)
+		return
+	}
+
 	c.pendingResolutions[query.From.ID] = PendingResolution{
 		ComplaintNumber: complaintNumber,
 		MessageID:       messageID,
@@ -699,6 +722,18 @@ func (c *Client) handleMessage(ctx context.Context, browserCtx interface{}, mess
 			MessageID: promptMsgID,
 		}
 		c.doRequest("deleteMessage", deleteReq)
+	}
+
+	// Check for "cancel" keyword (Case-insensitive)
+	if strings.EqualFold(strings.TrimSpace(message.Text), "cancel") {
+		log.Printf("❌ Resolution cancelled by keyword for user %s\n", message.From.FirstName)
+		msg := Message{
+			ChatID:    c.ChatID,
+			Text:      "❌ Resolution cancelled.",
+			ParseMode: "HTML",
+		}
+		c.doRequest("sendMessage", msg)
+		return
 	}
 
 	log.Printf("📝 Received resolution note from %s for complaint %s\n", message.From.FirstName, pending.ComplaintNumber)
