@@ -21,6 +21,7 @@ import (
 	"fmt"
 	"io"
 	"log"
+	"mime/multipart"
 	"net/http"
 	"os"
 	"strconv"
@@ -30,15 +31,16 @@ import (
 
 	"cmon/internal/api"
 	"cmon/internal/storage"
+	"cmon/internal/summary"
 )
 
 // PendingResolution stores information about a complaint awaiting resolution note.
 //
 // When a user clicks "Mark as Resolved" button:
-//   1. Store complaint info in pendingResolutions map
-//   2. Send prompt message asking for resolution note
-//   3. Wait for user's reply
-//   4. Process reply and mark complaint as resolved
+//  1. Store complaint info in pendingResolutions map
+//  2. Send prompt message asking for resolution note
+//  3. Wait for user's reply
+//  4. Process reply and mark complaint as resolved
 //
 // Fields:
 //   - ComplaintNumber: Complaint ID being resolved
@@ -103,9 +105,9 @@ type ForceReply struct {
 
 // Update represents a Telegram update from getUpdates.
 type Update struct {
-	UpdateID      int            `json:"update_id"`
+	UpdateID      int              `json:"update_id"`
 	Message       *IncomingMessage `json:"message,omitempty"`
-	CallbackQuery *CallbackQuery `json:"callback_query,omitempty"`
+	CallbackQuery *CallbackQuery   `json:"callback_query,omitempty"`
 }
 
 // IncomingMessage represents a received Telegram message.
@@ -242,14 +244,15 @@ func (c *Client) doRequest(method string, payload interface{}) (map[string]inter
 // SendComplaintMessage sends a new complaint notification to Telegram.
 //
 // Message format:
-//   📋 Complaint : 12345
-//   👤 John Doe
-//   📞 9876543210
-//   🆔 Consumer: 67890
-//   📅 2026-01-15
-//   💬 Details:
-//   [Complaint description]
-//   📍 Location, Area
+//
+//	📋 Complaint : 12345
+//	👤 John Doe
+//	📞 9876543210
+//	🆔 Consumer: 67890
+//	📅 2026-01-15
+//	💬 Details:
+//	[Complaint description]
+//	📍 Location, Area
 //
 // Features:
 //   - HTML formatting for better readability
@@ -349,12 +352,13 @@ func (c *Client) SendComplaintMessage(complaintJSON string, complaintNumber stri
 // This is called when all retry attempts fail and manual intervention is needed.
 //
 // Alert format:
-//   🚨 CRITICAL ALERT - CMON SERVICE
-//   Error Type: Fetch/Login Failure
-//   Error Message: [details]
-//   Retry Attempts: 3
-//   Timestamp: 2026-01-15 10:30:00
-//   ⚠️ Action Required: Please check the service immediately.
+//
+//	🚨 CRITICAL ALERT - CMON SERVICE
+//	Error Type: Fetch/Login Failure
+//	Error Message: [details]
+//	Retry Attempts: 3
+//	Timestamp: 2026-01-15 10:30:00
+//	⚠️ Action Required: Please check the service immediately.
 //
 // Parameters:
 //   - errorType: Type of error (e.g., "Fetch/Login Failure")
@@ -442,6 +446,72 @@ func (c *Client) EditMessageText(chatID, messageID, newText string) error {
 	return nil
 }
 
+// SendPhoto sends a photo (PNG bytes) to a Telegram chat.
+//
+// Uses multipart/form-data as required by Telegram's sendPhoto API.
+//
+// Parameters:
+//   - chatID: Target chat ID
+//   - photoBytes: PNG image data
+//   - caption: Optional caption text
+//
+// Returns:
+//   - error: Upload or API error
+func (c *Client) SendPhoto(chatID string, photoBytes []byte, caption string) error {
+	if c == nil {
+		log.Println("   ⚠️  Telegram not configured, skipping photo send")
+		return nil
+	}
+
+	log.Println("   📸 Sending photo to Telegram...")
+
+	// Build multipart form
+	var body bytes.Buffer
+	writer := multipart.NewWriter(&body)
+
+	// Add chat_id field
+	writer.WriteField("chat_id", chatID)
+
+	// Add caption if present
+	if caption != "" {
+		writer.WriteField("caption", caption)
+	}
+
+	// Add photo file
+	part, err := writer.CreateFormFile("photo", "summary.png")
+	if err != nil {
+		return fmt.Errorf("failed to create form file: %w", err)
+	}
+	part.Write(photoBytes)
+	writer.Close()
+
+	apiURL := fmt.Sprintf("https://api.telegram.org/bot%s/sendPhoto", c.BotToken)
+
+	req, err := http.NewRequest("POST", apiURL, &body)
+	if err != nil {
+		return fmt.Errorf("failed to create request: %w", err)
+	}
+	req.Header.Set("Content-Type", writer.FormDataContentType())
+
+	client := &http.Client{Timeout: 30 * time.Second}
+	resp, err := client.Do(req)
+	if err != nil {
+		return fmt.Errorf("failed to send photo: %w", err)
+	}
+	defer resp.Body.Close()
+
+	respBody, _ := io.ReadAll(resp.Body)
+	var result map[string]interface{}
+	json.Unmarshal(respBody, &result)
+
+	if ok, exists := result["ok"].(bool); !exists || !ok {
+		return fmt.Errorf("Telegram sendPhoto error: %v", result)
+	}
+
+	log.Println("   ✓ Photo successfully sent to Telegram")
+	return nil
+}
+
 // getUpdates fetches new updates from Telegram using long polling.
 //
 // Long polling:
@@ -516,10 +586,10 @@ func (c *Client) answerCallbackQuery(callbackQueryID string, text string) error 
 //   - Text messages (resolution notes)
 //
 // Update processing loop:
-//   1. Long poll for updates (30s timeout)
-//   2. Process each update
-//   3. Update offset to acknowledge processed updates
-//   4. Repeat until context is cancelled
+//  1. Long poll for updates (30s timeout)
+//  2. Process each update
+//  3. Update offset to acknowledge processed updates
+//  4. Repeat until context is cancelled
 //
 // Parameters:
 //   - ctx: Context for cancellation
@@ -562,10 +632,10 @@ func (c *Client) HandleUpdates(ctx context.Context, browserCtx interface{}, stor
 // handleCallbackQuery processes a callback query from an inline button.
 //
 // Flow when user clicks "Mark as Resolved":
-//   1. Parse callback data to get complaint number
-//   2. Store pending resolution with complaint details
-//   3. Send prompt message asking for resolution note
-//   4. Wait for user's text message reply
+//  1. Parse callback data to get complaint number
+//  2. Store pending resolution with complaint details
+//  3. Send prompt message asking for resolution note
+//  4. Wait for user's text message reply
 //
 // Parameters:
 //   - ctx: Context for cancellation
@@ -684,11 +754,11 @@ func (c *Client) handleCallbackQuery(ctx context.Context, query *CallbackQuery, 
 // handleMessage processes regular text messages (for resolution notes).
 //
 // Flow when user sends resolution note:
-//   1. Check if user has pending resolution
-//   2. Delete prompt message (keep chat clean)
-//   3. Call API to mark complaint as resolved on website
-//   4. Edit original Telegram message to show "RESOLVED"
-//   5. Remove complaint from storage
+//  1. Check if user has pending resolution
+//  2. Delete prompt message (keep chat clean)
+//  3. Call API to mark complaint as resolved on website
+//  4. Edit original Telegram message to show "RESOLVED"
+//  5. Remove complaint from storage
 //
 // Parameters:
 //   - ctx: Context for cancellation
@@ -696,11 +766,17 @@ func (c *Client) handleCallbackQuery(ctx context.Context, query *CallbackQuery, 
 //   - message: Incoming message
 //   - storage: Storage for complaint data
 func (c *Client) handleMessage(ctx context.Context, browserCtx interface{}, message *IncomingMessage, storage *storage.Storage) {
-	// Only process text messages from users with pending resolutions
 	if message.From == nil || message.Text == "" {
 		return
 	}
 
+	// Handle /summary command
+	if strings.TrimSpace(message.Text) == "/summary" {
+		c.handleSummaryCommand(ctx, browserCtx, storage)
+		return
+	}
+
+	// Only process text messages from users with pending resolutions
 	c.mu.Lock()
 	pending, exists := c.pendingResolutions[message.From.ID]
 	if !exists {
@@ -839,4 +915,81 @@ func (c *Client) handleMessage(ctx context.Context, browserCtx interface{}, mess
 	}
 
 	log.Printf("✓ Successfully resolved complaint %s with note\n", pending.ComplaintNumber)
+}
+
+// handleSummaryCommand processes the /summary command.
+//
+// Flow:
+//  1. Extract browser context from interface
+//  2. Fetch details for all pending complaints
+//  3. Render table image
+//  4. Send image to Telegram
+//
+// If no pending complaints exist, sends a text message instead.
+func (c *Client) handleSummaryCommand(ctx context.Context, browserCtx interface{}, stor *storage.Storage) {
+	log.Println("📊 /summary command received")
+
+	// Send "processing" message
+	processingMsg := Message{
+		ChatID:    c.ChatID,
+		Text:      "📊 <b>Generating summary...</b>\nFetching details for all pending complaints.",
+		ParseMode: "HTML",
+	}
+	c.doRequest("sendMessage", processingMsg)
+
+	// Extract browser context
+	var browserContext context.Context
+	if holder, ok := browserCtx.(interface{ Get() context.Context }); ok {
+		browserContext = holder.Get()
+	} else {
+		log.Println("⚠️  Invalid browser context type for summary")
+		errorMsg := Message{
+			ChatID:    c.ChatID,
+			Text:      "❌ Internal error: browser context unavailable.",
+			ParseMode: "HTML",
+		}
+		c.doRequest("sendMessage", errorMsg)
+		return
+	}
+
+	// Fetch all pending complaint details
+	complaints, err := summary.FetchAllPendingDetails(browserContext, stor)
+	if err != nil {
+		log.Printf("⚠️  Summary fetch failed: %v\n", err)
+		noDataMsg := Message{
+			ChatID:    c.ChatID,
+			Text:      "ℹ️ No pending complaints found.",
+			ParseMode: "HTML",
+		}
+		c.doRequest("sendMessage", noDataMsg)
+		return
+	}
+
+	// Render table image
+	imgBytes, err := summary.RenderTable(complaints)
+	if err != nil {
+		log.Printf("⚠️  Summary render failed: %v\n", err)
+		errorMsg := Message{
+			ChatID:    c.ChatID,
+			Text:      fmt.Sprintf("❌ Failed to render summary image: %v", err),
+			ParseMode: "HTML",
+		}
+		c.doRequest("sendMessage", errorMsg)
+		return
+	}
+
+	// Send image
+	caption := fmt.Sprintf("📋 %d Pending Complaints", len(complaints))
+	if err := c.SendPhoto(c.ChatID, imgBytes, caption); err != nil {
+		log.Printf("⚠️  Failed to send summary photo: %v\n", err)
+		errorMsg := Message{
+			ChatID:    c.ChatID,
+			Text:      fmt.Sprintf("❌ Failed to send summary image: %v", err),
+			ParseMode: "HTML",
+		}
+		c.doRequest("sendMessage", errorMsg)
+		return
+	}
+
+	log.Println("✓ Summary image sent successfully")
 }
