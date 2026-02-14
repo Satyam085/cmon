@@ -24,7 +24,7 @@ import (
 	"mime/multipart"
 	"net/http"
 	"os"
-	"strconv"
+
 	"strings"
 	"sync"
 	"time"
@@ -112,10 +112,11 @@ type Update struct {
 
 // IncomingMessage represents a received Telegram message.
 type IncomingMessage struct {
-	MessageID int    `json:"message_id"`
-	From      *User  `json:"from,omitempty"`
-	Chat      *Chat  `json:"chat,omitempty"`
-	Text      string `json:"text"`
+	MessageID      int              `json:"message_id"`
+	From           *User            `json:"from,omitempty"`
+	Chat           *Chat            `json:"chat,omitempty"`
+	Text           string           `json:"text"`
+	ReplyToMessage *IncomingMessage `json:"reply_to_message,omitempty"`
 }
 
 // Chat represents a Telegram chat.
@@ -711,15 +712,24 @@ func (c *Client) handleCallbackQuery(ctx context.Context, query *CallbackQuery, 
 		}
 	}
 
+	// Build mention text: use @username if available, otherwise use HTML mention with user ID
+	// This is needed for Selective ForceReply to target only this user in a group
+	mentionText := ""
+	if query.From.Username != "" {
+		mentionText = "@" + query.From.Username
+	} else {
+		mentionText = fmt.Sprintf("<a href=\"tg://user?id=%d\">%s</a>", query.From.ID, query.From.FirstName)
+	}
+
 	// Send prompt message asking for resolution note
-	originalMessageID, _ := strconv.Atoi(messageID)
+	// Selective: true + @mention ensures only the button-clicker sees the force-reply prompt
 	promptMsg := Message{
-		ChatID:           c.ChatID,
-		Text:             fmt.Sprintf("📝 Remarks for complaint <b>%s</b>\n👤 %s:", complaintNumber, consumerName),
-		ParseMode:        "HTML",
-		ReplyToMessageID: originalMessageID,
+		ChatID:    c.ChatID,
+		Text:      fmt.Sprintf("📝 %s, enter remarks for complaint <b>%s</b>\n👤 %s:", mentionText, complaintNumber, consumerName),
+		ParseMode: "HTML",
 		ReplyMarkup: &ForceReply{
 			ForceReply:            true,
+			Selective:             true,
 			InputFieldPlaceholder: "Enter resolution details...",
 		},
 	}
@@ -782,6 +792,13 @@ func (c *Client) handleMessage(ctx context.Context, browserCtx interface{}, mess
 	if !exists {
 		c.mu.Unlock()
 		return // No pending resolution for this user
+	}
+
+	// Verify this is a reply to the bot's prompt message (not a random message)
+	// If ReplyToMessage is nil (user typed without replying) or points to a different message, ignore it
+	if message.ReplyToMessage == nil || message.ReplyToMessage.MessageID != pending.PromptMessageID {
+		c.mu.Unlock()
+		return
 	}
 
 	promptMsgID := pending.PromptMessageID
