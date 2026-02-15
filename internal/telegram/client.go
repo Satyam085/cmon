@@ -267,7 +267,7 @@ func (c *Client) doRequest(method string, payload interface{}) (map[string]inter
 // Returns:
 //   - string: Telegram message ID
 //   - error: Send error
-func (c *Client) SendComplaintMessage(complaintJSON string, complaintNumber string) (string, error) {
+func (c *Client) SendComplaintMessage(complaintJSON string, complaintNumber string, gujaratiText string) (string, error) {
 	if c == nil {
 		log.Println("   ⚠️  Telegram not configured, skipping message send")
 		return "", nil
@@ -298,7 +298,7 @@ func (c *Client) SendComplaintMessage(complaintJSON string, complaintNumber stri
 			"📞 %s\n"+
 			"🆔 Consumer: %s\n"+
 			"📅 %s\n\n"+
-			"💬 <b>Details:</b>\n%s\n\n"+
+			"💬 <b>Details:</b>\n%s\n"+
 			"📍 %s, %s",
 		getValue("complain_no"),
 		getValue("complainant_name"),
@@ -309,6 +309,12 @@ func (c *Client) SendComplaintMessage(complaintJSON string, complaintNumber stri
 		getValue("exact_location"),
 		getValue("area"),
 	)
+
+	// Append Gujarati translation if available
+	if gujaratiText != "" {
+		message += "\n\n" + strings.Repeat("─", 10) + "\n" +
+			 gujaratiText
+	}
 
 	// Create inline keyboard with "Mark as Resolved" button
 	// Callback data format: "resolve:COMPLAINT_NUMBER"

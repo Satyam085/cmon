@@ -9,6 +9,7 @@ import (
 	"cmon/internal/errors"
 	"cmon/internal/storage"
 	"cmon/internal/telegram"
+	"cmon/internal/translate"
 
 	"github.com/chromedp/chromedp"
 )
@@ -32,10 +33,11 @@ import (
 //      f. Navigate to next page
 //   3. Return all active complaint IDs found
 type Fetcher struct {
-	ctx     context.Context
-	storage *storage.Storage
-	tg      *telegram.Client
-	cfg     *config.Config
+	ctx        context.Context
+	storage    *storage.Storage
+	tg         *telegram.Client
+	cfg        *config.Config
+	translator *translate.Translator
 }
 
 // New creates a new complaint fetcher.
@@ -48,12 +50,13 @@ type Fetcher struct {
 //
 // Returns:
 //   - *Fetcher: Ready-to-use fetcher instance
-func New(ctx context.Context, storage *storage.Storage, tg *telegram.Client, cfg *config.Config) *Fetcher {
+func New(ctx context.Context, storage *storage.Storage, tg *telegram.Client, cfg *config.Config, translator *translate.Translator) *Fetcher {
 	return &Fetcher{
-		ctx:     ctx,
-		storage: storage,
-		tg:      tg,
-		cfg:     cfg,
+		ctx:        ctx,
+		storage:    storage,
+		tg:         tg,
+		cfg:        cfg,
+		translator: translator,
 	}
 }
 
@@ -258,7 +261,7 @@ func (f *Fetcher) processComplaintsConcurrently(complaints []Link) {
 	}
 
 	// Create worker pool
-	pool := NewWorkerPool(f.ctx, f.tg, f.cfg.WorkerPoolSize)
+	pool := NewWorkerPool(f.ctx, f.tg, f.translator, f.cfg.WorkerPoolSize)
 
 	// Submit all jobs
 	go func() {

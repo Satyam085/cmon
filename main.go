@@ -41,6 +41,7 @@ import (
 	"cmon/internal/health"
 	"cmon/internal/storage"
 	"cmon/internal/telegram"
+	"cmon/internal/translate"
 )
 
 func main() {
@@ -71,6 +72,16 @@ func main() {
 	// Step 3: Initialize Telegram client (optional)
 	log.Println("📱 Initializing Telegram...")
 	tg := telegram.NewClient()
+
+	// Step 3b: Initialize Google Cloud Translator (optional)
+	log.Println("🌐 Initializing Gujarati translator...")
+	translator, err := translate.NewTranslator(context.Background(), cfg.GoogleProjectID)
+	if err != nil {
+		log.Printf("⚠️  Translator init failed (translation disabled): %v", err)
+	}
+	if translator != nil {
+		defer translator.Close()
+	}
 
 	// Step 4: Initialize health monitor
 	healthMonitor := health.NewMonitor()
@@ -120,7 +131,7 @@ func main() {
 
 	// Step 9: Initial fetch of complaints
 	log.Println("📬 Fetching complaints...")
-	fetcher := complaint.New(ctxHolder.Get(), stor, tg, cfg)
+	fetcher := complaint.New(ctxHolder.Get(), stor, tg, cfg, translator)
 	activeComplaintIDs, err := fetcher.FetchAll(cfg.ComplaintURL)
 	if err != nil {
 		log.Fatal("❌ Failed to fetch complaints:", err)
@@ -171,6 +182,7 @@ func main() {
 				cfg.MaxFetchRetries,
 				cfg.FetchTimeout,
 				healthMonitor,
+				translator,
 			)
 
 			if fetchErr != nil {
@@ -222,6 +234,7 @@ func fetchWithRetry(
 	maxRetries int,
 	fetchTimeout time.Duration,
 	healthMonitor *health.Monitor,
+	translator *translate.Translator,
 ) error {
 	var lastErr error
 
@@ -234,7 +247,7 @@ func fetchWithRetry(
 		fetchCtx, fetchCancel := context.WithTimeout(ctxHolder.Get(), fetchTimeout)
 
 		// Attempt to fetch complaints
-		fetcher := complaint.New(fetchCtx, stor, tg, cfg)
+		fetcher := complaint.New(fetchCtx, stor, tg, cfg, translator)
 		activeComplaintIDs, err := fetcher.FetchAll(complaintURL)
 		fetchCancel() // Always cancel timeout context
 

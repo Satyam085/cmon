@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"cmon/internal/telegram"
+	"cmon/internal/translate"
 
 	"github.com/chromedp/cdproto/runtime"
 	"github.com/chromedp/chromedp"
@@ -30,12 +31,13 @@ import (
 //   4. Repeat: Continue until jobs channel closes
 //   5. Stop: Exit when jobs channel is closed
 type Worker struct {
-	id      int                // Worker ID for logging
-	jobs    <-chan Link        // Input: Complaints to process
-	results chan<- ProcessResult // Output: Processing results
-	ctx     context.Context    // Browser context for API calls
-	tg      *telegram.Client   // Telegram client for notifications
-	wg      *sync.WaitGroup    // WaitGroup for coordinated shutdown
+	id         int                   // Worker ID for logging
+	jobs       <-chan Link           // Input: Complaints to process
+	results    chan<- ProcessResult  // Output: Processing results
+	ctx        context.Context       // Browser context for API calls
+	tg         *telegram.Client      // Telegram client for notifications
+	translator *translate.Translator // Translator for Gujarati (can be nil)
+	wg         *sync.WaitGroup       // WaitGroup for coordinated shutdown
 }
 
 // WorkerPool manages a pool of concurrent complaint processing workers.
@@ -78,7 +80,7 @@ type WorkerPool struct {
 //
 // Returns:
 //   - *WorkerPool: Ready-to-use worker pool
-func NewWorkerPool(ctx context.Context, tg *telegram.Client, workerCount int) *WorkerPool {
+func NewWorkerPool(ctx context.Context, tg *telegram.Client, translator *translate.Translator, workerCount int) *WorkerPool {
 	log.Printf("  → Creating worker pool with %d workers...\n", workerCount)
 
 	pool := &WorkerPool{
@@ -91,12 +93,13 @@ func NewWorkerPool(ctx context.Context, tg *telegram.Client, workerCount int) *W
 	// Create and start workers
 	for i := 0; i < workerCount; i++ {
 		worker := &Worker{
-			id:      i + 1,
-			jobs:    pool.jobs,
-			results: pool.results,
-			ctx:     ctx,
-			tg:      tg,
-			wg:      &pool.wg,
+			id:         i + 1,
+			jobs:       pool.jobs,
+			results:    pool.results,
+			ctx:        ctx,
+			tg:         tg,
+			translator: translator,
+			wg:         &pool.wg,
 		}
 
 		pool.workers[i] = worker
@@ -284,10 +287,16 @@ func (w *Worker) processComplaint(complaint Link) ProcessResult {
 	// Convert to pretty JSON for Telegram
 	prettyJSON, _ := json.MarshalIndent(details, "  ", "  ")
 
+	// Translate complaint fields to Gujarati if translator is available
+	var gujaratiText string
+	if w.translator != nil {
+		gujaratiText = w.buildGujaratiText(details)
+	}
+
 	// Send to Telegram if client is configured
 	var messageID string
 	if w.tg != nil {
-		msgID, err := w.tg.SendComplaintMessage(string(prettyJSON), complaint.ComplaintNumber)
+		msgID, err := w.tg.SendComplaintMessage(string(prettyJSON), complaint.ComplaintNumber, gujaratiText)
 		if err != nil {
 			return ProcessResult{
 				ComplaintID:  complaint.ComplaintNumber,
@@ -309,4 +318,52 @@ func (w *Worker) processComplaint(complaint Link) ProcessResult {
 		ConsumerName: consumerName,
 		Error:        nil,
 	}
+}
+
+// buildGujaratiText translates complaint fields and formats them in Gujarati.
+//
+// Translates dynamic fields: complainant name, description, location, area.
+// Static labels are hardcoded in Gujarati for consistency.
+// If translation fails, logs a warning and returns empty string.
+//
+// Parameters:
+//   - details: Complaint details with fields to translate
+//
+// Returns:
+//   - string: Formatted Gujarati text, or empty string on failure
+func (w *Worker) buildGujaratiText(details Details) string {
+	ctx := w.ctx
+
+	// Helper to safely get string value from interface{}
+	safeStr := func(v interface{}) string {
+		if v == nil {
+			return ""
+		}
+		return fmt.Sprintf("%v", v)
+	}
+
+	// Only translate Name, Details, and Location/Area
+	name := safeStr(details.ComplainantName)
+	description := safeStr(details.Description)
+	location := safeStr(details.ExactLocation)
+	area := safeStr(details.Area)
+
+	// Batch translate all fields in a single API call
+	texts := []string{name, description, location, area}
+	translated, err := w.translator.BatchTranslateToGujarati(ctx, texts)
+	if err != nil {
+		log.Printf("  ⚠️  Batch translation failed: %v", err)
+		return "" // Skip Gujarati section on failure
+	}
+
+	// Compact format — only translated fields
+	return fmt.Sprintf(
+		"👤 %s\n"+
+			"💬 %s\n"+
+			"📍 %s, %s",
+		translated[0],
+		translated[1],
+		translated[2],
+		translated[3],
+	)
 }

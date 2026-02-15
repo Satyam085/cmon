@@ -71,6 +71,9 @@ type Config struct {
 	// Debug mode - skips actual API calls for testing
 	DebugMode bool
 
+	// Google Cloud Translation (optional)
+	GoogleProjectID string // Google Cloud project ID for Translation API
+
 	// Performance tuning (NEW)
 	WorkerPoolSize int           // Number of concurrent workers for complaint processing
 	CacheEnabled   bool          // Enable in-memory caching
@@ -146,6 +149,9 @@ func LoadConfig() (*Config, error) {
 
 		// Debug mode - default false (production mode)
 		DebugMode: getEnvOrDefault("DEBUG_MODE", "false") == "true",
+
+		// Google Cloud Translation (optional)
+		GoogleProjectID: os.Getenv("GOOGLE_PROJECT_ID"),
 
 		// Performance tuning (NEW) - optimized defaults
 		WorkerPoolSize: getEnvInt("WORKER_POOL_SIZE", 10),                   // 10 concurrent workers
