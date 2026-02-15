@@ -348,8 +348,11 @@ func (w *Worker) buildGujaratiText(details Details) string {
 	location := safeStr(details.ExactLocation)
 	area := safeStr(details.Area)
 
-	// Batch translate all fields in a single API call
-	texts := []string{name, description, location, area}
+	// Combine location and area into a single Address field
+	address := fmt.Sprintf("%s, %s", location, area)
+
+	// Batch translate all fields in a single API call (3 fields)
+	texts := []string{name, description, address}
 	translated, err := w.translator.BatchTranslateToGujarati(ctx, texts)
 	if err != nil {
 		log.Printf("  ⚠️  Batch translation failed: %v", err)
@@ -360,10 +363,9 @@ func (w *Worker) buildGujaratiText(details Details) string {
 	return fmt.Sprintf(
 		"👤 %s\n"+
 			"💬 %s\n"+
-			"📍 %s, %s",
+			"📍 %s",
 		translated[0],
 		translated[1],
 		translated[2],
-		translated[3],
 	)
 }

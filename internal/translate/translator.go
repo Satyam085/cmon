@@ -93,8 +93,8 @@ func (t *Translator) BatchTranslateToGujarati(ctx context.Context, texts []strin
 	}
 
 	// Build prompt with labeled fields for structured output
-	prompt := fmt.Sprintf("Name: %s\nDetails: %s\nLocation: %s\nArea: %s",
-		texts[0], texts[1], texts[2], texts[3])
+	prompt := fmt.Sprintf("Name: %s\nDetails: %s\nAddress: %s",
+		texts[0], texts[1], texts[2])
 
 	reqBody := geminiRequest{
 		SystemInstruction: &content{
@@ -169,7 +169,7 @@ func parseTranslationResponse(response string, originals []string) []string {
 	result := make([]string, len(originals))
 	copy(result, originals) // Default to originals
 
-	labels := []string{"Name:", "Details:", "Location:", "Area:"}
+	labels := []string{"Name:", "Details:", "Address:"}
 
 	for i, label := range labels {
 		idx := strings.Index(response, label)
