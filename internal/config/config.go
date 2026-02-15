@@ -72,7 +72,7 @@ type Config struct {
 	DebugMode bool
 
 	// Google Cloud Translation (optional)
-	GoogleProjectID string // Google Cloud project ID for Translation API
+	GeminiAPIKey string // Gemini API key for Gujarati transliteration
 
 	// Performance tuning (NEW)
 	WorkerPoolSize int           // Number of concurrent workers for complaint processing
@@ -151,7 +151,7 @@ func LoadConfig() (*Config, error) {
 		DebugMode: getEnvOrDefault("DEBUG_MODE", "false") == "true",
 
 		// Google Cloud Translation (optional)
-		GoogleProjectID: os.Getenv("GOOGLE_PROJECT_ID"),
+		GeminiAPIKey: os.Getenv("GEMINI_API_KEY"),
 
 		// Performance tuning (NEW) - optimized defaults
 		WorkerPoolSize: getEnvInt("WORKER_POOL_SIZE", 10),                   // 10 concurrent workers

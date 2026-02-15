@@ -73,9 +73,9 @@ func main() {
 	log.Println("📱 Initializing Telegram...")
 	tg := telegram.NewClient()
 
-	// Step 3b: Initialize Google Cloud Translator (optional)
+	// Step 3b: Initialize Gemini Translator (optional)
 	log.Println("🌐 Initializing Gujarati translator...")
-	translator, err := translate.NewTranslator(context.Background(), cfg.GoogleProjectID)
+	translator, err := translate.NewTranslator(context.Background(), cfg.GeminiAPIKey)
 	if err != nil {
 		log.Printf("⚠️  Translator init failed (translation disabled): %v", err)
 	}
