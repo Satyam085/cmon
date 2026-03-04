@@ -1,192 +1,233 @@
 // Package storage provides persistent and in-memory storage for complaint data.
 //
 // This package implements a two-tier storage system:
-//  1. CSV file for persistence (survives restarts)
-//  2. In-memory cache for fast lookups (O(1) instead of O(n))
+//  1. SQLite database for persistent storage (survives restarts)
+//  2. In-memory cache for fast lookups (O(1) instead of O(n) DB queries)
 //
 // Thread-safety:
-//   - All operations are protected by mutex
+//   - All operations are protected by a RWMutex
 //   - Safe for concurrent access from multiple goroutines
-//   - Atomic read-modify-write operations
 //
-// Performance optimizations:
-//   - In-memory cache eliminates CSV scans for lookups
-//   - Batch writes reduce file I/O
-//   - Buffered I/O for faster CSV operations
+// Migration:
+//   - On first run, it automatically migrates existing complaints.csv to SQLite
 package storage
 
 import (
-	"bufio"
+	"database/sql"
 	"encoding/csv"
 	"log"
 	"os"
 	"sync"
+
+	_ "modernc.org/sqlite"
 )
 
 const (
-	// complaintFile is the CSV file path for persistent storage
-	complaintFile = "complaints.csv"
-
-	// bufferSize for buffered I/O (64KB)
-	// Larger buffer = fewer system calls = faster writes
-	bufferSize = 64 * 1024
+	legacyCSVFile = "complaints.csv"
+	dbFile        = "cmon.db"
 )
 
 // Record represents a single complaint record with all associated data.
-//
-// Fields:
-//   - ComplaintID: Unique complaint number (e.g., "12345")
-//   - MessageID: Telegram message ID for editing (e.g., "789")
-//   - APIID: Internal API ID for resolution calls (e.g., "456")
-//   - ConsumerName: Name of the complainant for display
 type Record struct {
 	ComplaintID  string
 	MessageID    string
+	WAMessageID  string
 	APIID        string
 	ConsumerName string
 }
 
 // Storage provides thread-safe storage for complaint data.
-//
-// Architecture:
-//   - CSV file: Persistent storage (survives restarts)
-//   - In-memory maps: Fast lookups (O(1) access)
-//   - Mutex: Thread-safety for concurrent access
-//
-// Data flow:
-//   Read:  CSV → Load into maps → Serve from maps
-//   Write: Update maps → Append to CSV
-//   Delete: Remove from maps → Rewrite entire CSV
-//
-// Why rewrite on delete:
-//   - CSV doesn't support in-place deletion
-//   - Deletions are rare (only when complaints resolve)
-//   - Rewrite is fast enough for small datasets (<10k records)
 type Storage struct {
-	mu            sync.Mutex        // Protects all maps and file operations
-	seen          map[string]bool   // complaintID → exists (for quick "is new?" checks)
+	mu            sync.RWMutex
+	db            *sql.DB
+	seen          map[string]bool   // complaintID → exists
 	messageIDs    map[string]string // complaintID → Telegram message ID
+	waMessageIDs  map[string]string // complaintID → WhatsApp message ID
 	apiIDs        map[string]string // complaintID → API ID
 	consumerNames map[string]string // complaintID → Consumer name
 }
 
-// New creates a new Storage instance and loads existing data from CSV.
-//
-// Initialization flow:
-//   1. Create empty maps
-//   2. Load data from CSV file (if exists)
-//   3. Populate maps with loaded data
-//   4. Return ready-to-use storage
-//
-// Returns:
-//   - *Storage: Initialized storage with data loaded from CSV
+// New creates a new Storage instance, connects to SQLite, and loads into memory.
+// It also handles the one-time migration from complaints.csv if it exists.
 func New() *Storage {
 	s := &Storage{
 		seen:          make(map[string]bool),
 		messageIDs:    make(map[string]string),
+		waMessageIDs:  make(map[string]string),
 		apiIDs:        make(map[string]string),
 		consumerNames: make(map[string]string),
 	}
 
-	// Load existing data from CSV
-	s.loadFromFile()
+	// Connect to SQLite
+	db, err := sql.Open("sqlite", dbFile+"?_pragma=foreign_keys(1)")
+	if err != nil {
+		log.Fatalf("❌ Failed to open SQLite database %s: %v", dbFile, err)
+	}
+	s.db = db
+
+	// Create table if not exists
+	_, err = db.Exec(`
+		CREATE TABLE IF NOT EXISTS complaints (
+			complaint_id TEXT PRIMARY KEY,
+			tg_message_id TEXT,
+			wa_message_id TEXT,
+			api_id TEXT,
+			consumer_name TEXT,
+			created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+		)
+	`)
+	if err != nil {
+		log.Fatalf("❌ Failed to create complaints table: %v", err)
+	}
+
+	// Run migration from old complaints.csv if needed
+	s.migrateFromCSV()
+
+	// Load data from DB into memory maps
+	s.loadFromDB()
 
 	return s
 }
 
-// loadFromFile loads complaint data from the CSV file into memory.
-//
-// CSV format:
-//   - No header row (or header is skipped)
-//   - Columns: ComplaintID, MessageID, APIID, ConsumerName
-//   - Example: "12345","789","456","John Doe"
-//
-// Error handling:
-//   - File not found: Normal on first run, creates new file
-//   - Parse errors: Logged but don't stop loading
-//   - Malformed rows: Skipped with warning
-//
-// Performance:
-//   - Reads entire file into memory at once
-//   - Fast for small-medium datasets (<100k records)
-//   - For larger datasets, consider streaming or database
-func (s *Storage) loadFromFile() {
-	file, err := os.Open(complaintFile)
+// migrateFromCSV parses the legacy complaints.csv file, inserts all records
+// into SQLite, and renames the CSV to .bak to prevent re-migration.
+func (s *Storage) migrateFromCSV() {
+	if _, err := os.Stat(legacyCSVFile); os.IsNotExist(err) {
+		return // No CSV file to migrate
+	}
+
+	log.Println("🔄 Found legacy complaints.csv. Migrating to SQLite...")
+
+	file, err := os.Open(legacyCSVFile)
 	if err != nil {
-		if os.IsNotExist(err) {
-			log.Println("📋 No existing complaint file found. Creating new one...")
-		} else {
-			log.Println("⚠️  Failed to open complaint file:", err)
-		}
+		log.Printf("⚠️  Failed to open %s for migration: %v", legacyCSVFile, err)
 		return
 	}
 	defer file.Close()
 
-	// Parse CSV
 	reader := csv.NewReader(file)
 	records, err := reader.ReadAll()
 	if err != nil {
-		log.Println("⚠️  Failed to read complaint file:", err)
+		log.Printf("⚠️  Failed to read CSV for migration: %v", err)
 		return
 	}
 
-	// Load records into maps
-	count := 0
+	// Begin transaction
+	tx, err := s.db.Begin()
+	if err != nil {
+		log.Printf("⚠️  Failed to begin migration transaction: %v", err)
+		return
+	}
+
+	stmt, err := tx.Prepare(`
+		INSERT OR IGNORE INTO complaints (complaint_id, tg_message_id, wa_message_id, api_id, consumer_name) 
+		VALUES (?, ?, '', ?, ?)
+	`)
+	if err != nil {
+		tx.Rollback()
+		log.Printf("⚠️  Failed to prepare migration statement: %v", err)
+		return
+	}
+	defer stmt.Close()
+
+	migratedCount := 0
 	for i, record := range records {
-		// Skip header row if present
-		// Simple heuristic: if first column is "ComplaintID" or "complaint_id", it's a header
 		if i == 0 && len(record) > 0 && (record[0] == "ComplaintID" || record[0] == "complaint_id") {
+			continue // Skip header
+		}
+		if len(record) < 1 {
 			continue
 		}
 
-		// Validate record has at least complaint ID
-		if len(record) >= 1 {
-			complaintID := record[0]
-			s.seen[complaintID] = true
+		complaintID := record[0]
+		tgMessageID := ""
+		apiID := ""
+		consumerName := ""
 
-			// Load optional fields if present
-			if len(record) >= 2 {
-				s.messageIDs[complaintID] = record[1]
-			}
-			if len(record) >= 3 {
-				s.apiIDs[complaintID] = record[2]
-			}
-			if len(record) >= 4 {
-				s.consumerNames[complaintID] = record[3]
-			}
+		if len(record) >= 2 {
+			tgMessageID = record[1]
+		}
+		if len(record) >= 3 {
+			apiID = record[2]
+		}
+		if len(record) >= 4 {
+			consumerName = record[3]
+		}
 
+		_, err := stmt.Exec(complaintID, tgMessageID, apiID, consumerName)
+		if err != nil {
+			log.Printf("⚠️  Failed to migrate record %s: %v", complaintID, err)
+			continue
+		}
+		migratedCount++
+	}
+
+	if err := tx.Commit(); err != nil {
+		log.Printf("⚠️  Failed to commit migration transaction: %v", err)
+		return
+	}
+
+	log.Printf("✅ Migrated %d complaints to SQLite.", migratedCount)
+
+	// Rename CSV to prevent re-migration
+	backupFile := legacyCSVFile + ".bak"
+	file.Close() // Must close before renaming on Windows (safe to call twice due to defer)
+	if err := os.Rename(legacyCSVFile, backupFile); err != nil {
+		log.Printf("⚠️  Failed to backup CSV to %s: %v. Please delete %s manually.", backupFile, err, legacyCSVFile)
+	} else {
+		log.Printf("   Old file renamed to %s", backupFile)
+	}
+}
+
+// loadFromDB loads all complaint data from SQLite into the in-memory maps.
+func (s *Storage) loadFromDB() {
+	rows, err := s.db.Query(`SELECT complaint_id, tg_message_id, wa_message_id, api_id, consumer_name FROM complaints`)
+	if err != nil {
+		log.Fatalf("❌ Failed to query database on load: %v", err)
+	}
+	defer rows.Close()
+
+	count := 0
+	for rows.Next() {
+		var complaintID, tgMessageID, waMessageID, apiID, consumerName sql.NullString
+		if err := rows.Scan(&complaintID, &tgMessageID, &waMessageID, &apiID, &consumerName); err != nil {
+			log.Printf("⚠️  Failed to scan row on load: %v", err)
+			continue
+		}
+
+		if complaintID.Valid && complaintID.String != "" {
+			s.seen[complaintID.String] = true
+			if tgMessageID.Valid {
+				s.messageIDs[complaintID.String] = tgMessageID.String
+			}
+			if waMessageID.Valid {
+				s.waMessageIDs[complaintID.String] = waMessageID.String
+			}
+			if apiID.Valid {
+				s.apiIDs[complaintID.String] = apiID.String
+			}
+			if consumerName.Valid {
+				s.consumerNames[complaintID.String] = consumerName.String
+			}
 			count++
 		}
 	}
 
-	log.Println("📚 Loaded", count, "previously seen complaints from storage")
+	if err := rows.Err(); err != nil {
+		log.Printf("⚠️  Row iteration error during load: %v", err)
+	}
+
+	log.Printf("📚 Loaded %d previously seen complaints from database", count)
 }
 
-// IsNew checks if a complaint ID has been seen before.
-//
-// This is the most frequently called method, so it's optimized for speed:
-//   - O(1) map lookup
-//   - Read lock for concurrent access
-//   - No file I/O
-//
-// Parameters:
-//   - complaintID: Complaint number to check
-//
-// Returns:
-//   - bool: true if complaint is new (not seen before), false if already seen
+// IsNew checks if a complaint ID has been seen before (O(1) memory lookup).
 func (s *Storage) IsNew(complaintID string) bool {
-	s.mu.Lock()
-	defer s.mu.Unlock()
+	s.mu.RLock()
+	defer s.mu.RUnlock()
 	return !s.seen[complaintID]
 }
 
-// MarkAsSeen marks a complaint as seen in memory.
-//
-// Note: This only updates the in-memory map, not the CSV file.
-// Use SaveMultiple() to persist to disk.
-//
-// Parameters:
-//   - complaintID: Complaint number to mark as seen
+// MarkAsSeen marks a complaint as seen in memory only.
 func (s *Storage) MarkAsSeen(complaintID string) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -194,81 +235,84 @@ func (s *Storage) MarkAsSeen(complaintID string) {
 }
 
 // GetMessageID retrieves the Telegram message ID for a complaint.
-//
-// Parameters:
-//   - complaintID: Complaint number
-//
-// Returns:
-//   - string: Telegram message ID, or empty string if not found
 func (s *Storage) GetMessageID(complaintID string) string {
-	s.mu.Lock()
-	defer s.mu.Unlock()
+	s.mu.RLock()
+	defer s.mu.RUnlock()
 	return s.messageIDs[complaintID]
 }
 
-// SetMessageID sets the Telegram message ID for a complaint.
-//
-// Note: This only updates the in-memory map, not the CSV file.
-// Use SaveMultiple() to persist to disk.
-//
-// Parameters:
-//   - complaintID: Complaint number
-//   - messageID: Telegram message ID
+// SetMessageID sets the Telegram message ID for a complaint (memory only).
 func (s *Storage) SetMessageID(complaintID, messageID string) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.messageIDs[complaintID] = messageID
 }
 
-// GetAPIID retrieves the API ID for a complaint.
-//
-// Parameters:
-//   - complaintID: Complaint number
-//
-// Returns:
-//   - string: API ID, or empty string if not found
-func (s *Storage) GetAPIID(complaintID string) string {
+// SetWAMessageID updates both memory and DB with a new WhatsApp Message ID.
+// This is called asynchronously when a WA message is successfully sent.
+func (s *Storage) SetWAMessageID(complaintID, waMessageID string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+
+	// Update memory
+	s.waMessageIDs[complaintID] = waMessageID
+
+	// Update DB immediately
+	_, err := s.db.Exec(`UPDATE complaints SET wa_message_id = ? WHERE complaint_id = ?`, waMessageID, complaintID)
+	if err != nil {
+		log.Printf("⚠️  Failed to persist WA message ID for %s: %v", complaintID, err)
+		return err
+	}
+	return nil
+}
+
+// GetComplaintIDByWAMessageID does a reverse lookup from WhatsApp Message ID to Complaint ID.
+// Used by the WhatsApp reply-to-resolve parser.
+func (s *Storage) GetComplaintIDByWAMessageID(waMessageID string) (string, bool) {
+	// First check memory map for speed
+	s.mu.RLock()
+	for cid, wamid := range s.waMessageIDs {
+		if wamid == waMessageID {
+			s.mu.RUnlock()
+			return cid, true
+		}
+	}
+	s.mu.RUnlock()
+
+	// Fallback to DB (in case of memory desync)
+	var complaintID string
+	err := s.db.QueryRow(`SELECT complaint_id FROM complaints WHERE wa_message_id = ?`, waMessageID).Scan(&complaintID)
+	if err == sql.ErrNoRows || err != nil {
+		return "", false
+	}
+	return complaintID, true
+}
+
+// GetAPIID retrieves the API ID for a complaint.
+func (s *Storage) GetAPIID(complaintID string) string {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
 	return s.apiIDs[complaintID]
 }
 
 // GetConsumerName retrieves the consumer name for a complaint.
-//
-// Parameters:
-//   - complaintID: Complaint number
-//
-// Returns:
-//   - string: Consumer name, or empty string if not found
 func (s *Storage) GetConsumerName(complaintID string) string {
-	s.mu.Lock()
-	defer s.mu.Unlock()
+	s.mu.RLock()
+	defer s.mu.RUnlock()
 	return s.consumerNames[complaintID]
 }
 
-// Exists checks if a complaint exists in storage.
-//
-// Parameters:
-//   - complaintID: Complaint number to check
-//
-// Returns:
-//   - bool: true if complaint exists, false otherwise
+// Exists checks if a complaint exists in memory.
 func (s *Storage) Exists(complaintID string) bool {
-	s.mu.Lock()
-	defer s.mu.Unlock()
+	s.mu.RLock()
+	defer s.mu.RUnlock()
 	return s.seen[complaintID]
 }
 
-// GetAllSeenComplaints returns a list of all complaint IDs in storage.
-//
-// Use case:
-//   - Finding resolved complaints (complaints in storage but not on website)
-//
-// Returns:
-//   - []string: List of all complaint IDs
+// GetAllSeenComplaints returns a list of all active complaint IDs.
 func (s *Storage) GetAllSeenComplaints() []string {
-	s.mu.Lock()
-	defer s.mu.Unlock()
+	s.mu.RLock()
+	defer s.mu.RUnlock()
 
 	complaints := make([]string, 0, len(s.seen))
 	for id := range s.seen {
@@ -277,68 +321,42 @@ func (s *Storage) GetAllSeenComplaints() []string {
 	return complaints
 }
 
-// SaveMultiple atomically saves multiple complaint records to storage.
-//
-// This is the preferred way to save data because:
-//   - Batches multiple writes into one file operation
-//   - Reduces file I/O overhead
-//   - Atomic: either all records save or none do
-//
-// Flow:
-//   1. Acquire lock
-//   2. Append records to CSV file
-//   3. Update in-memory maps (only after successful write)
-//   4. Release lock
-//
-// Performance:
-//   - Uses buffered I/O for faster writes
-//   - Batch of 50 records: ~5ms (vs ~250ms for 50 individual writes)
-//   - 50x speedup from batching
-//
-// Parameters:
-//   - records: Slice of complaint records to save
-//
-// Returns:
-//   - error: File I/O error, nil on success
+// SaveMultiple atomically inserts records into SQLite and updates memory.
 func (s *Storage) SaveMultiple(records []Record) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	// Open file in append mode
-	file, err := os.OpenFile(complaintFile, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
+	tx, err := s.db.Begin()
 	if err != nil {
 		return err
 	}
-	defer file.Close()
 
-	// Use buffered writer for performance
-	// This reduces system calls by buffering writes in memory
-	bufferedWriter := bufio.NewWriterSize(file, bufferSize)
-	writer := csv.NewWriter(bufferedWriter)
+	stmt, err := tx.Prepare(`
+		INSERT OR REPLACE INTO complaints (complaint_id, tg_message_id, wa_message_id, api_id, consumer_name) 
+		VALUES (?, ?, ?, ?, ?)
+	`)
+	if err != nil {
+		tx.Rollback()
+		return err
+	}
+	defer stmt.Close()
 
-	// Write all records
 	for _, r := range records {
-		if err := writer.Write([]string{r.ComplaintID, r.MessageID, r.APIID, r.ConsumerName}); err != nil {
+		if _, err := stmt.Exec(r.ComplaintID, r.MessageID, r.WAMessageID, r.APIID, r.ConsumerName); err != nil {
+			tx.Rollback()
 			return err
 		}
 	}
 
-	// Flush CSV writer to buffered writer
-	writer.Flush()
-	if err := writer.Error(); err != nil {
+	if err := tx.Commit(); err != nil {
 		return err
 	}
 
-	// Flush buffered writer to file
-	if err := bufferedWriter.Flush(); err != nil {
-		return err
-	}
-
-	// Update in-memory maps ONLY after successful write
-	// This ensures consistency between file and memory
+	// Update memory
 	for _, r := range records {
 		s.seen[r.ComplaintID] = true
 		s.messageIDs[r.ComplaintID] = r.MessageID
+		s.waMessageIDs[r.ComplaintID] = r.WAMessageID
 		s.apiIDs[r.ComplaintID] = r.APIID
 		s.consumerNames[r.ComplaintID] = r.ConsumerName
 	}
@@ -346,125 +364,62 @@ func (s *Storage) SaveMultiple(records []Record) error {
 	return nil
 }
 
-// Remove removes a complaint from storage.
-//
-// This operation:
-//   1. Removes from in-memory maps
-//   2. Rewrites entire CSV file without the removed record
-//
-// Why rewrite entire file:
-//   - CSV doesn't support in-place deletion
-//   - Deletions are rare (only when complaints resolve)
-//   - Fast enough for small datasets
-//
-// Parameters:
-//   - complaintID: Complaint number to remove
-//
-// Returns:
-//   - error: File I/O error, nil on success
+// Remove permanently deletes a complaint from SQLite and memory.
 func (s *Storage) Remove(complaintID string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	// Remove from in-memory maps
+	_, err := s.db.Exec(`DELETE FROM complaints WHERE complaint_id = ?`, complaintID)
+	if err != nil {
+		return err
+	}
+
 	delete(s.seen, complaintID)
 	delete(s.messageIDs, complaintID)
+	delete(s.waMessageIDs, complaintID)
 	delete(s.apiIDs, complaintID)
 	delete(s.consumerNames, complaintID)
 
-	// Rewrite CSV file without the removed complaint
-	return s.rewriteFile()
+	return nil
 }
 
-// RemoveIfExists atomically checks if complaint exists and removes it.
-//
-// This is useful for concurrent scenarios where multiple goroutines
-// might try to remove the same complaint.
-//
-// Parameters:
-//   - complaintID: Complaint number to remove
-//
-// Returns:
-//   - bool: true if complaint was removed, false if it didn't exist
-//   - error: File I/O error, nil on success
+// RemoveIfExists conditionally deletes a complaint from SQLite and memory.
+// Returns true if deleted, false if it didn't exist.
 func (s *Storage) RemoveIfExists(complaintID string) (bool, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	// Check if complaint exists
 	if !s.seen[complaintID] {
-		return false, nil // Already removed
+		return false, nil
 	}
 
-	// Remove from in-memory maps
+	_, err := s.db.Exec(`DELETE FROM complaints WHERE complaint_id = ?`, complaintID)
+	if err != nil {
+		return false, err
+	}
+
 	delete(s.seen, complaintID)
 	delete(s.messageIDs, complaintID)
+	delete(s.waMessageIDs, complaintID)
 	delete(s.apiIDs, complaintID)
 	delete(s.consumerNames, complaintID)
 
-	// Rewrite CSV file
-	return true, s.rewriteFile()
+	return true, nil
 }
 
-// rewriteFile rewrites the entire CSV file with current in-memory data.
-//
-// This is called after deletions to remove records from the file.
-//
-// Flow:
-//   1. Open file in truncate mode (clears existing content)
-//   2. Write all records from in-memory maps
-//   3. Close file
-//
-// Note: Caller must hold the mutex lock
-//
-// Returns:
-//   - error: File I/O error, nil on success
-func (s *Storage) rewriteFile() error {
-	// Open file in truncate mode (clears existing content)
-	file, err := os.OpenFile(complaintFile, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0644)
-	if err != nil {
-		return err
+// Close gracefully closes the SQLite database connection.
+func (s *Storage) Close() error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.db != nil {
+		return s.db.Close()
 	}
-	defer file.Close()
+	return nil
+}
 
-	// Use buffered writer for performance
-	bufferedWriter := bufio.NewWriterSize(file, bufferSize)
-	writer := csv.NewWriter(bufferedWriter)
-
-	// Write all records from memory
-	for id := range s.seen {
-		record := []string{id}
-
-		// Add optional fields
-		if msgID, ok := s.messageIDs[id]; ok {
-			record = append(record, msgID)
-		} else {
-			record = append(record, "")
-		}
-
-		if apiID, ok := s.apiIDs[id]; ok {
-			record = append(record, apiID)
-		} else {
-			record = append(record, "")
-		}
-
-		if consumerName, ok := s.consumerNames[id]; ok {
-			record = append(record, consumerName)
-		} else {
-			record = append(record, "")
-		}
-
-		if err := writer.Write(record); err != nil {
-			return err
-		}
-	}
-
-	// Flush CSV writer
-	writer.Flush()
-	if err := writer.Error(); err != nil {
-		return err
-	}
-
-	// Flush buffered writer
-	return bufferedWriter.Flush()
+// getStorageStats (diagnostic) returns the total rows directly from DB count.
+func (s *Storage) getStorageStats() (int, error) {
+	var count int
+	err := s.db.QueryRow(`SELECT count(*) FROM complaints`).Scan(&count)
+	return count, err
 }

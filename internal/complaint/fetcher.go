@@ -264,7 +264,7 @@ func (f *Fetcher) processComplaintsConcurrently(complaints []Link) {
 	}
 
 	// Create worker pool
-	pool := NewWorkerPool(f.ctx, f.tg, f.wa, f.translator, f.cfg.WorkerPoolSize)
+	pool := NewWorkerPool(f.ctx, f.tg, f.wa, f.translator, f.storage, f.cfg.WorkerPoolSize)
 
 	// Submit all jobs
 	go func() {

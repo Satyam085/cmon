@@ -10,6 +10,7 @@ import (
 	"sync"
 	"time"
 
+	"cmon/internal/storage"
 	"cmon/internal/telegram"
 	"cmon/internal/translate"
 	"cmon/internal/whatsapp"
@@ -40,6 +41,7 @@ type Worker struct {
 	tg         *telegram.Client      // Telegram client for notifications
 	wa         *whatsapp.Client      // WhatsApp client for notifications (can be nil)
 	translator *translate.Translator // Translator for Gujarati (can be nil)
+	stor       *storage.Storage      // Storage for persisting message IDs
 	wg         *sync.WaitGroup       // WaitGroup for coordinated shutdown
 }
 
@@ -83,12 +85,12 @@ type WorkerPool struct {
 //
 // Returns:
 //   - *WorkerPool: Ready-to-use worker pool
-func NewWorkerPool(ctx context.Context, tg *telegram.Client, wa *whatsapp.Client, translator *translate.Translator, workerCount int) *WorkerPool {
+func NewWorkerPool(ctx context.Context, tg *telegram.Client, wa *whatsapp.Client, translator *translate.Translator, stor *storage.Storage, workerCount int) *WorkerPool {
 	log.Printf("  → Creating worker pool with %d workers...\n", workerCount)
 
 	pool := &WorkerPool{
 		workers:     make([]*Worker, workerCount),
-		jobs:        make(chan Link, 100),        // Buffer 100 jobs
+		jobs:        make(chan Link, 100),          // Buffer 100 jobs
 		results:     make(chan ProcessResult, 100), // Buffer 100 results
 		workerCount: workerCount,
 	}
@@ -103,6 +105,7 @@ func NewWorkerPool(ctx context.Context, tg *telegram.Client, wa *whatsapp.Client
 			tg:         tg,
 			wa:         wa,
 			translator: translator,
+			stor:       stor,
 			wg:         &pool.wg,
 		}
 
@@ -312,14 +315,11 @@ func (w *Worker) processComplaint(complaint Link) ProcessResult {
 	}
 
 	// Send to WhatsApp if client is configured
-	// WhatsApp does not support HTML, so we strip tags and compose plain text.
 	if w.wa != nil {
 		waText := buildWhatsAppMessage(details, gujaratiText)
-		if err := w.wa.SendMessage(waText); err != nil {
+		if err := w.wa.SendComplaintMessage(waText, complaint.ComplaintNumber, w.stor); err != nil {
 			// Non-fatal: log warning but don't fail the complaint processing
 			log.Printf("  ⚠️  Failed to send WhatsApp notification for %s: %v", complaint.ComplaintNumber, err)
-		} else {
-			log.Printf("  ✓ WhatsApp notification sent for %s", complaint.ComplaintNumber)
 		}
 	}
 

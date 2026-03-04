@@ -112,6 +112,19 @@ func main() {
 		log.Println("✓ Telegram callback handler started")
 	}
 
+	// Step 7a: Start WhatsApp event handler if configured
+	if wa != nil {
+		waCtx, waCancel := context.WithCancel(context.Background())
+		defer waCancel()
+
+		go wa.HandleEvents(waCtx, ctxHolder, stor, cfg.WhatsAppResolveEnabled, cfg.DebugMode)
+		if cfg.WhatsAppResolveEnabled {
+			log.Println("✓ WhatsApp event handler started (resolve-by-reply ENABLED)")
+		} else {
+			log.Println("✓ WhatsApp event handler started (/summary only; resolve-by-reply disabled)")
+		}
+	}
+
 	// Step 8: Login with retry logic
 	log.Println("🔐 Attempting to login...")
 	var loginErr error
