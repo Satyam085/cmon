@@ -15,9 +15,11 @@ package storage
 import (
 	"database/sql"
 	"encoding/csv"
+	"fmt"
 	"log"
 	"os"
 	"sync"
+	"time"
 
 	_ "modernc.org/sqlite"
 )
@@ -38,24 +40,34 @@ type Record struct {
 
 // Storage provides thread-safe storage for complaint data.
 type Storage struct {
-	mu            sync.RWMutex
-	db            *sql.DB
-	seen          map[string]bool   // complaintID → exists
-	messageIDs    map[string]string // complaintID → Telegram message ID
-	waMessageIDs  map[string]string // complaintID → WhatsApp message ID
-	apiIDs        map[string]string // complaintID → API ID
-	consumerNames map[string]string // complaintID → Consumer name
+	mu                  sync.RWMutex
+	db                  *sql.DB
+	seen                map[string]bool   // complaintID → exists
+	messageIDs          map[string]string // complaintID → Telegram message ID
+	waMessageIDs        map[string]string // complaintID → WhatsApp message ID
+	waMessageToComplaint map[string]string // waMessageID → complaintID (Reverse lookup)
+	apiIDs              map[string]string // complaintID → API ID
+	consumerNames       map[string]string // complaintID → Consumer name
+}
+
+// PendingResolution stores info about a complaint awaiting resolution note
+type PendingResolution struct {
+	ComplaintNumber string
+	MessageID       string
+	OriginalText    string
+	PromptMessageID int
 }
 
 // New creates a new Storage instance, connects to SQLite, and loads into memory.
 // It also handles the one-time migration from complaints.csv if it exists.
 func New() *Storage {
 	s := &Storage{
-		seen:          make(map[string]bool),
-		messageIDs:    make(map[string]string),
-		waMessageIDs:  make(map[string]string),
-		apiIDs:        make(map[string]string),
-		consumerNames: make(map[string]string),
+		seen:                 make(map[string]bool),
+		messageIDs:           make(map[string]string),
+		waMessageIDs:         make(map[string]string),
+		waMessageToComplaint: make(map[string]string),
+		apiIDs:               make(map[string]string),
+		consumerNames:        make(map[string]string),
 	}
 
 	// Connect to SQLite
@@ -63,6 +75,15 @@ func New() *Storage {
 	if err != nil {
 		log.Fatalf("❌ Failed to open SQLite database %s: %v", dbFile, err)
 	}
+	
+	importTime := time.Now()
+	_ = importTime // for time package use
+	
+	// Configure connection pooling
+	db.SetMaxOpenConns(25)
+	db.SetMaxIdleConns(25)
+	db.SetConnMaxLifetime(5 * time.Minute)
+
 	s.db = db
 
 	// Create table if not exists
@@ -74,10 +95,18 @@ func New() *Storage {
 			api_id TEXT,
 			consumer_name TEXT,
 			created_at DATETIME DEFAULT CURRENT_TIMESTAMP
-		)
+		);
+		CREATE TABLE IF NOT EXISTS pending_resolutions (
+			user_id INTEGER PRIMARY KEY,
+			complaint_id TEXT,
+			message_id TEXT,
+			original_text TEXT,
+			prompt_message_id INTEGER,
+			created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+		);
 	`)
 	if err != nil {
-		log.Fatalf("❌ Failed to create complaints table: %v", err)
+		log.Fatalf("❌ Failed to create tables: %v", err)
 	}
 
 	// Run migration from old complaints.csv if needed
@@ -200,8 +229,9 @@ func (s *Storage) loadFromDB() {
 			if tgMessageID.Valid {
 				s.messageIDs[complaintID.String] = tgMessageID.String
 			}
-			if waMessageID.Valid {
+			if waMessageID.Valid && waMessageID.String != "" {
 				s.waMessageIDs[complaintID.String] = waMessageID.String
+				s.waMessageToComplaint[waMessageID.String] = complaintID.String
 			}
 			if apiID.Valid {
 				s.apiIDs[complaintID.String] = apiID.String
@@ -254,8 +284,14 @@ func (s *Storage) SetWAMessageID(complaintID, waMessageID string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
+	// Need existence check so we don't save WA message ID if complaint is bad or deleted
+	if !s.seen[complaintID] {
+		return fmt.Errorf("complaint %s not found in storage", complaintID)
+	}
+
 	// Update memory
 	s.waMessageIDs[complaintID] = waMessageID
+	s.waMessageToComplaint[waMessageID] = complaintID
 
 	// Update DB immediately
 	_, err := s.db.Exec(`UPDATE complaints SET wa_message_id = ? WHERE complaint_id = ?`, waMessageID, complaintID)
@@ -271,11 +307,9 @@ func (s *Storage) SetWAMessageID(complaintID, waMessageID string) error {
 func (s *Storage) GetComplaintIDByWAMessageID(waMessageID string) (string, bool) {
 	// First check memory map for speed
 	s.mu.RLock()
-	for cid, wamid := range s.waMessageIDs {
-		if wamid == waMessageID {
-			s.mu.RUnlock()
-			return cid, true
-		}
+	if cid, exists := s.waMessageToComplaint[waMessageID]; exists {
+		s.mu.RUnlock()
+		return cid, true
 	}
 	s.mu.RUnlock()
 
@@ -285,6 +319,12 @@ func (s *Storage) GetComplaintIDByWAMessageID(waMessageID string) (string, bool)
 	if err == sql.ErrNoRows || err != nil {
 		return "", false
 	}
+	// Opportunistic cache fill
+	s.mu.Lock()
+	s.waMessageIDs[complaintID] = waMessageID
+	s.waMessageToComplaint[waMessageID] = complaintID
+	s.mu.Unlock()
+
 	return complaintID, true
 }
 
@@ -356,7 +396,10 @@ func (s *Storage) SaveMultiple(records []Record) error {
 	for _, r := range records {
 		s.seen[r.ComplaintID] = true
 		s.messageIDs[r.ComplaintID] = r.MessageID
-		s.waMessageIDs[r.ComplaintID] = r.WAMessageID
+		if r.WAMessageID != "" {
+			s.waMessageIDs[r.ComplaintID] = r.WAMessageID
+			s.waMessageToComplaint[r.WAMessageID] = r.ComplaintID
+		}
 		s.apiIDs[r.ComplaintID] = r.APIID
 		s.consumerNames[r.ComplaintID] = r.ConsumerName
 	}
@@ -372,6 +415,11 @@ func (s *Storage) Remove(complaintID string) error {
 	_, err := s.db.Exec(`DELETE FROM complaints WHERE complaint_id = ?`, complaintID)
 	if err != nil {
 		return err
+	}
+
+	// Remove WA message ID from reverse index
+	if waMsgID, ok := s.waMessageIDs[complaintID]; ok && waMsgID != "" {
+		delete(s.waMessageToComplaint, waMsgID)
 	}
 
 	delete(s.seen, complaintID)
@@ -398,6 +446,11 @@ func (s *Storage) RemoveIfExists(complaintID string) (bool, error) {
 		return false, err
 	}
 
+	// Remove WA message ID from reverse index
+	if waMsgID, ok := s.waMessageIDs[complaintID]; ok && waMsgID != "" {
+		delete(s.waMessageToComplaint, waMsgID)
+	}
+
 	delete(s.seen, complaintID)
 	delete(s.messageIDs, complaintID)
 	delete(s.waMessageIDs, complaintID)
@@ -405,6 +458,44 @@ func (s *Storage) RemoveIfExists(complaintID string) (bool, error) {
 	delete(s.consumerNames, complaintID)
 
 	return true, nil
+}
+
+// GetPendingResolution retrieves a pending resolution from SQLite.
+func (s *Storage) GetPendingResolution(userID int64) (PendingResolution, bool) {
+	var pr PendingResolution
+	err := s.db.QueryRow(`
+		SELECT complaint_id, message_id, original_text, prompt_message_id
+		FROM pending_resolutions
+		WHERE user_id = ?
+	`, userID).Scan(&pr.ComplaintNumber, &pr.MessageID, &pr.OriginalText, &pr.PromptMessageID)
+	if err == sql.ErrNoRows {
+		return pr, false
+	} else if err != nil {
+		log.Printf("⚠️  Failed to query pending resolution for user %d: %v", userID, err)
+		return pr, false
+	}
+	return pr, true
+}
+
+// AddPendingResolution inserts or replaces a pending resolution in SQLite.
+func (s *Storage) AddPendingResolution(userID int64, pr PendingResolution) error {
+	_, err := s.db.Exec(`
+		INSERT OR REPLACE INTO pending_resolutions (user_id, complaint_id, message_id, original_text, prompt_message_id) 
+		VALUES (?, ?, ?, ?, ?)
+	`, userID, pr.ComplaintNumber, pr.MessageID, pr.OriginalText, pr.PromptMessageID)
+	if err != nil {
+		log.Printf("⚠️  Failed to save pending resolution for user %d: %v", userID, err)
+		return err
+	}
+	return nil
+}
+
+// RemovePendingResolution deletes a pending resolution from SQLite.
+func (s *Storage) RemovePendingResolution(userID int64) {
+	_, err := s.db.Exec(`DELETE FROM pending_resolutions WHERE user_id = ?`, userID)
+	if err != nil {
+		log.Printf("⚠️  Failed to delete pending resolution for user %d: %v", userID, err)
+	}
 }
 
 // Close gracefully closes the SQLite database connection.

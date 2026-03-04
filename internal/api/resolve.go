@@ -3,6 +3,7 @@ package api
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"log"
 	"net/url"
@@ -54,7 +55,7 @@ func ResolveComplaint(ctx context.Context, apiID string, remark string, debugMod
 
 	// Build request body in application/x-www-form-urlencoded format
 	// Format: key1=value1&key2=value2&key3=value3
-	requestBody := fmt.Sprintf("complaint_id=%s&complaint_AsignType=resolved&remark=%s", apiID, encodedRemark)
+	requestBody := fmt.Sprintf("complaint_id=%s&complaint_AsignType=resolved&remark=%s", url.QueryEscape(apiID), encodedRemark)
 
 	log.Printf("  → Marking complaint %s as resolved on website...\n", apiID)
 
@@ -71,6 +72,9 @@ func ResolveComplaint(ctx context.Context, apiID string, remark string, debugMod
 	// This ensures session cookies are included automatically
 	var responseText string
 
+	apiURLJSON, _ := json.Marshal(apiURL)
+	reqBodyJSON, _ := json.Marshal(requestBody)
+
 	// Use chromedp.Evaluate to run JavaScript in the browser
 	// The async/await pattern is crucial here:
 	//   - fetch() returns a Promise
@@ -84,13 +88,13 @@ func ResolveComplaint(ctx context.Context, apiID string, remark string, debugMod
 			(async function() {
 				try {
 					// Make POST request with session cookies
-					const response = await fetch('%s', {
+					const response = await fetch(%s, {
 						method: 'POST',
 						headers: {
 							'Content-Type': 'application/x-www-form-urlencoded; charset=UTF-8',
 							'X-Requested-With': 'XMLHttpRequest'
 						},
-						body: '%s'
+						body: %s
 					});
 					
 					// Check HTTP status
@@ -103,7 +107,7 @@ func ResolveComplaint(ctx context.Context, apiID string, remark string, debugMod
 					return 'ERROR: ' + error.message;
 				}
 			})()
-		`, apiURL, requestBody), &responseText, func(p *runtime.EvaluateParams) *runtime.EvaluateParams {
+		`, apiURLJSON, reqBodyJSON), &responseText, func(p *runtime.EvaluateParams) *runtime.EvaluateParams {
 			// Wait for the async function to complete
 			return p.WithAwaitPromise(true)
 		}),

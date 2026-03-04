@@ -282,7 +282,7 @@ func (c *Client) HandleEvents(ctx context.Context, browserCtxHolder interface{},
 			text = msg.Message.GetExtendedTextMessage().GetText()
 		}
 		text = strings.TrimSpace(text)
-		if text == "" {
+		if text == "" || msg.Info.IsFromMe {
 			return
 		}
 

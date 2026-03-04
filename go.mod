@@ -7,6 +7,9 @@ require (
 	github.com/chromedp/chromedp v0.14.2
 	github.com/fogleman/gg v1.3.0
 	github.com/joho/godotenv v1.5.1
+	go.mau.fi/whatsmeow v0.0.0-20260227112304-c9652e4448a2
+	google.golang.org/protobuf v1.36.11
+	modernc.org/sqlite v1.46.1
 )
 
 require (
@@ -31,16 +34,13 @@ require (
 	github.com/vektah/gqlparser/v2 v2.5.27 // indirect
 	go.mau.fi/libsignal v0.2.1 // indirect
 	go.mau.fi/util v0.9.6 // indirect
-	go.mau.fi/whatsmeow v0.0.0-20260227112304-c9652e4448a2 // indirect
 	golang.org/x/crypto v0.48.0 // indirect
 	golang.org/x/exp v0.0.0-20260212183809-81e46e3db34a // indirect
 	golang.org/x/image v0.36.0 // indirect
 	golang.org/x/net v0.50.0 // indirect
 	golang.org/x/sys v0.41.0 // indirect
 	golang.org/x/text v0.34.0 // indirect
-	google.golang.org/protobuf v1.36.11 // indirect
 	modernc.org/libc v1.67.6 // indirect
 	modernc.org/mathutil v1.7.1 // indirect
 	modernc.org/memory v1.11.0 // indirect
-	modernc.org/sqlite v1.46.1 // indirect
 )

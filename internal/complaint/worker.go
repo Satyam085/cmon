@@ -6,14 +6,8 @@ import (
 	"encoding/json"
 	"fmt"
 	"log"
-	"strings"
 	"sync"
 	"time"
-
-	"cmon/internal/storage"
-	"cmon/internal/telegram"
-	"cmon/internal/translate"
-	"cmon/internal/whatsapp"
 
 	"github.com/chromedp/cdproto/runtime"
 	"github.com/chromedp/chromedp"
@@ -29,7 +23,7 @@ import (
 //
 // Lifecycle:
 //   1. Start: Begin listening on jobs channel
-//   2. Process: Fetch details and send to Telegram
+//   2. Process: Fetch details via chromedp
 //   3. Result: Send result to results channel
 //   4. Repeat: Continue until jobs channel closes
 //   5. Stop: Exit when jobs channel is closed
@@ -38,10 +32,6 @@ type Worker struct {
 	jobs       <-chan Link           // Input: Complaints to process
 	results    chan<- ProcessResult  // Output: Processing results
 	ctx        context.Context       // Browser context for API calls
-	tg         *telegram.Client      // Telegram client for notifications
-	wa         *whatsapp.Client      // WhatsApp client for notifications (can be nil)
-	translator *translate.Translator // Translator for Gujarati (can be nil)
-	stor       *storage.Storage      // Storage for persisting message IDs
 	wg         *sync.WaitGroup       // WaitGroup for coordinated shutdown
 }
 
@@ -52,11 +42,6 @@ type Worker struct {
 //   - Resource reuse (workers stay alive between jobs)
 //   - Backpressure handling (buffered job channel)
 //   - Graceful shutdown (wait for all workers to finish)
-//
-// Performance:
-//   - Sequential: 1 complaint/sec = 60 complaints/min
-//   - 10 workers: 10 complaints/sec = 600 complaints/min
-//   - 10x throughput improvement
 //
 // Configuration:
 //   - Worker count: Configurable via config (default: 10)
@@ -72,20 +57,13 @@ type WorkerPool struct {
 
 // NewWorkerPool creates a new worker pool for concurrent complaint processing.
 //
-// Initialization:
-//   1. Create buffered channels for jobs and results
-//   2. Create worker instances
-//   3. Start all workers in goroutines
-//   4. Return pool for job submission
-//
 // Parameters:
 //   - ctx: Browser context for API calls
-//   - tg: Telegram client for notifications
 //   - workerCount: Number of concurrent workers
 //
 // Returns:
 //   - *WorkerPool: Ready-to-use worker pool
-func NewWorkerPool(ctx context.Context, tg *telegram.Client, wa *whatsapp.Client, translator *translate.Translator, stor *storage.Storage, workerCount int) *WorkerPool {
+func NewWorkerPool(ctx context.Context, workerCount int) *WorkerPool {
 	log.Printf("  → Creating worker pool with %d workers...\n", workerCount)
 
 	pool := &WorkerPool{
@@ -102,10 +80,6 @@ func NewWorkerPool(ctx context.Context, tg *telegram.Client, wa *whatsapp.Client
 			jobs:       pool.jobs,
 			results:    pool.results,
 			ctx:        ctx,
-			tg:         tg,
-			wa:         wa,
-			translator: translator,
-			stor:       stor,
 			wg:         &pool.wg,
 		}
 
@@ -121,24 +95,11 @@ func NewWorkerPool(ctx context.Context, tg *telegram.Client, wa *whatsapp.Client
 }
 
 // Submit adds a complaint to the processing queue.
-//
-// This is non-blocking if the job buffer has space.
-// If buffer is full, this will block until a worker picks up a job.
-//
-// Parameters:
-//   - complaint: Complaint link to process
 func (p *WorkerPool) Submit(complaint Link) {
 	p.jobs <- complaint
 }
 
 // Close closes the job channel and waits for all workers to finish.
-//
-// Shutdown flow:
-//   1. Close jobs channel (signals workers to stop after current job)
-//   2. Wait for all workers to finish their current jobs
-//   3. Close results channel (signals no more results coming)
-//
-// This ensures graceful shutdown with no lost work.
 func (p *WorkerPool) Close() {
 	close(p.jobs)    // No more jobs will be submitted
 	p.wg.Wait()      // Wait for all workers to finish
@@ -146,39 +107,16 @@ func (p *WorkerPool) Close() {
 }
 
 // Results returns the results channel for collecting processed complaints.
-//
-// Usage:
-//   for result := range pool.Results() {
-//       // Handle result
-//   }
-//
-// Returns:
-//   - <-chan ProcessResult: Read-only results channel
 func (p *WorkerPool) Results() <-chan ProcessResult {
 	return p.results
 }
 
 // start begins the worker's processing loop.
-//
-// Worker loop:
-//   1. Wait for job from jobs channel
-//   2. Process job (fetch details, send to Telegram)
-//   3. Send result to results channel
-//   4. Repeat until jobs channel closes
-//
-// Error handling:
-//   - Errors are logged and sent in result
-//   - Worker continues processing next job
-//   - No worker crashes from individual job failures
 func (w *Worker) start() {
 	defer w.wg.Done()
 
-	log.Printf("  ✓ Worker #%d started\n", w.id)
-
 	// Process jobs until channel closes
 	for job := range w.jobs {
-		log.Printf("  [Worker #%d] Processing complaint %s\n", w.id, job.ComplaintNumber)
-
 		// Process the complaint
 		result := w.processComplaint(job)
 
@@ -187,57 +125,47 @@ func (w *Worker) start() {
 
 		if result.Error != nil {
 			log.Printf("  [Worker #%d] ✗ Failed to process %s: %v\n", w.id, job.ComplaintNumber, result.Error)
-		} else {
-			log.Printf("  [Worker #%d] ✓ Processed %s successfully\n", w.id, job.ComplaintNumber)
 		}
 	}
-
-	log.Printf("  ✓ Worker #%d stopped\n", w.id)
 }
 
-// processComplaint fetches complaint details and sends to Telegram.
+// processComplaint fetches complaint details.
 //
 // Processing flow:
 //   1. Build API URL with complaint's API ID
 //   2. Fetch complaint details via browser (uses session cookies)
 //   3. Parse JSON response
 //   4. Extract consumer name
-//   5. Send formatted message to Telegram
-//   6. Return result with message ID and consumer name
-//
-// Why use browser for API calls:
-//   - Automatically includes session cookies
-//   - No need to manage authentication tokens
-//   - Same session as the browser automation
+//   5. Return result with Details struct to be processed later
 //
 // Parameters:
 //   - complaint: Complaint link with API ID
 //
 // Returns:
-//   - ProcessResult: Result with message ID or error
+//   - ProcessResult: Result containing the details or error
 func (w *Worker) processComplaint(complaint Link) ProcessResult {
 	// Build API URL
 	apiURL := fmt.Sprintf("https://complaint.dgvcl.com/api/complaint-record/%s", complaint.APIID)
 
 	var jsonResponse string
 
+	// Create context with timeout for worker to prevent silent cancellations
+	workerCtx, cancel := context.WithTimeout(w.ctx, 30*time.Second)
+	defer cancel()
+
+	apiURLJSON, _ := json.Marshal(apiURL)
+
 	// Fetch complaint details using browser context
-	// This ensures session cookies are included automatically
-	//
-	// The async/await pattern is crucial:
-	//   - fetch() returns a Promise
-	//   - await ensures we wait for the response
-	//   - WithAwaitPromise(true) tells ChromeDP to wait for Promise resolution
-	err := chromedp.Run(w.ctx,
+	err := chromedp.Run(workerCtx,
 		chromedp.Evaluate(fmt.Sprintf(`
 			(async function() {
-				const response = await fetch('%s', {
+				const response = await fetch(%s, {
 					headers: { 'X-Requested-With': 'XMLHttpRequest' }
 				});
 				if (!response.ok) throw new Error('HTTP status ' + response.status);
 				return await response.text();
 			})()
-		`, apiURL), &jsonResponse, func(p *runtime.EvaluateParams) *runtime.EvaluateParams {
+		`, apiURLJSON), &jsonResponse, func(p *runtime.EvaluateParams) *runtime.EvaluateParams {
 			return p.WithAwaitPromise(true)
 		}),
 	)
@@ -291,142 +219,13 @@ func (w *Worker) processComplaint(complaint Link) ProcessResult {
 		consumerName = fmt.Sprintf("%v", details.ComplainantName)
 	}
 
-	// Convert to pretty JSON for Telegram
-	prettyJSON, _ := json.MarshalIndent(details, "  ", "  ")
-
-	// Translate complaint fields to Gujarati if translator is available
-	var gujaratiText string
-	if w.translator != nil {
-		gujaratiText = w.buildGujaratiText(details)
-	}
-
-	// Send to Telegram if client is configured
-	var messageID string
-	if w.tg != nil {
-		msgID, err := w.tg.SendComplaintMessage(string(prettyJSON), complaint.ComplaintNumber, gujaratiText)
-		if err != nil {
-			return ProcessResult{
-				ComplaintID:  complaint.ComplaintNumber,
-				ConsumerName: consumerName,
-				Error:        fmt.Errorf("failed to send Telegram notification: %w", err),
-			}
-		}
-		messageID = msgID
-	}
-
-	// Send to WhatsApp if client is configured
-	if w.wa != nil {
-		waText := buildWhatsAppMessage(details, gujaratiText)
-		if err := w.wa.SendComplaintMessage(waText, complaint.ComplaintNumber, w.stor); err != nil {
-			// Non-fatal: log warning but don't fail the complaint processing
-			log.Printf("  ⚠️  Failed to send WhatsApp notification for %s: %v", complaint.ComplaintNumber, err)
-		}
-	}
-
-	// Add small delay to avoid rate limiting
-	// Telegram API limit: 30 messages/second
-	// With 10 workers: 10 messages/second (safe margin)
+	// Add small delay to avoid overwhelming the target server locally
 	time.Sleep(100 * time.Millisecond)
 
 	return ProcessResult{
 		ComplaintID:  complaint.ComplaintNumber,
-		MessageID:    messageID,
 		ConsumerName: consumerName,
+		Details:      details,
 		Error:        nil,
 	}
-}
-
-// buildGujaratiText translates complaint fields and formats them in Gujarati.
-//
-// Translates dynamic fields: complainant name, description, location, area.
-// Static labels are hardcoded in Gujarati for consistency.
-// If translation fails, logs a warning and returns empty string.
-//
-// Parameters:
-//   - details: Complaint details with fields to translate
-//
-// Returns:
-//   - string: Formatted Gujarati text, or empty string on failure
-func (w *Worker) buildGujaratiText(details Details) string {
-	ctx := w.ctx
-
-	// Helper to safely get string value from interface{}
-	safeStr := func(v interface{}) string {
-		if v == nil {
-			return ""
-		}
-		return fmt.Sprintf("%v", v)
-	}
-
-	// Only translate Name, Details, and Location/Area
-	name := safeStr(details.ComplainantName)
-	description := safeStr(details.Description)
-	location := safeStr(details.ExactLocation)
-	area := safeStr(details.Area)
-
-	// Combine location and area into a single Address field
-	address := fmt.Sprintf("%s, %s", location, area)
-
-	// Batch translate all fields in a single API call (3 fields)
-	texts := []string{name, description, address}
-	translated, err := w.translator.BatchTranslateToGujarati(ctx, texts)
-	if err != nil {
-		log.Printf("  ⚠️  Batch translation failed: %v", err)
-		return "" // Skip Gujarati section on failure
-	}
-
-	// Compact format — only translated fields
-	return fmt.Sprintf(
-		"👤 %s\n"+
-			"💬 %s\n"+
-			"📍 %s",
-		translated[0],
-		translated[1],
-		translated[2],
-	)
-}
-
-// buildWhatsAppMessage formats complaint details as plain text for WhatsApp.
-//
-// WhatsApp does not support HTML formatting, so this produces a clean
-// plain-text version of the complaint notification.
-//
-// Parameters:
-//   - details:      Parsed complaint details
-//   - gujaratiText: Optional Gujarati translation (appended if non-empty)
-//
-// Returns:
-//   - string: Plain-text formatted message
-func buildWhatsAppMessage(details Details, gujaratiText string) string {
-	// Helper to safely extract string from interface{}
-	str := func(v interface{}) string {
-		if v == nil {
-			return ""
-		}
-		return fmt.Sprintf("%v", v)
-	}
-
-	msg := fmt.Sprintf(
-		"📋 Complaint: %s\n\n"+
-			"👤 %s\n"+
-			"📞 %s\n"+
-			"🆔 Consumer: %s\n"+
-			"📅 %s\n\n"+
-			"💬 Details:\n%s\n"+
-			"📍 %s, %s",
-		str(details.ComplainNo),
-		str(details.ComplainantName),
-		str(details.MobileNo),
-		str(details.ConsumerNo),
-		str(details.ComplainDate),
-		str(details.Description),
-		str(details.ExactLocation),
-		str(details.Area),
-	)
-
-	if gujaratiText != "" {
-		msg += "\n\n" + strings.Repeat("─", 10) + "\n" + gujaratiText
-	}
-
-	return msg
 }

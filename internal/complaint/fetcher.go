@@ -3,7 +3,10 @@ package complaint
 
 import (
 	"context"
+	"encoding/json"
+	"fmt"
 	"log"
+	"strings"
 
 	"cmon/internal/config"
 	"cmon/internal/errors"
@@ -252,7 +255,9 @@ func (f *Fetcher) scrapePage() ([]string, error) {
 //   2. Submit all complaints to job queue
 //   3. Close job queue (signals no more jobs)
 //   4. Collect results from workers
-//   5. Batch save successful results to storage
+//   5. Batch translate all collected complaint details
+//   6. Send Telegram notifications and save to DB
+//   7. Send WhatsApp notifications (deferred until DB save)
 //
 // Parameters:
 //   - complaints: List of new complaints to process
@@ -264,7 +269,7 @@ func (f *Fetcher) processComplaintsConcurrently(complaints []Link) {
 	}
 
 	// Create worker pool
-	pool := NewWorkerPool(f.ctx, f.tg, f.wa, f.translator, f.storage, f.cfg.WorkerPoolSize)
+	pool := NewWorkerPool(f.ctx, f.cfg.WorkerPoolSize)
 
 	// Submit all jobs
 	go func() {
@@ -275,25 +280,85 @@ func (f *Fetcher) processComplaintsConcurrently(complaints []Link) {
 	}()
 
 	// Collect results
-	var recordsToSave []storage.Record
+	var results []ProcessResult
 	for result := range pool.Results() {
 		if result.Error != nil {
-			log.Printf("    ⚠️  Failed to process %s: %v", result.ComplaintID, result.Error)
+			log.Printf("    ⚠️  Failed to fetch details for %s: %v", result.ComplaintID, result.Error)
 			continue
 		}
-
-		// Only save if we got a message ID
-		if result.MessageID != "" {
-			recordsToSave = append(recordsToSave, storage.Record{
-				ComplaintID:  result.ComplaintID,
-				MessageID:    result.MessageID,
-				APIID:        apiIDMap[result.ComplaintID], // Get API ID from map
-				ConsumerName: result.ConsumerName,
-			})
-		}
+		results = append(results, result)
 	}
 
-	// Batch save to storage
+	if len(results) == 0 {
+		return
+	}
+
+	// Helper to safely get string value from interface{}
+	safeStr := func(v interface{}) string {
+		if v == nil {
+			return ""
+		}
+		return fmt.Sprintf("%v", v)
+	}
+
+	// Phase 2: Batch Translation
+	var textsToTranslate []string
+	for _, res := range results {
+		name := safeStr(res.Details.ComplainantName)
+		desc := safeStr(res.Details.Description)
+		loc := safeStr(res.Details.ExactLocation)
+		area := safeStr(res.Details.Area)
+		addr := fmt.Sprintf("%s, %s", loc, area)
+		textsToTranslate = append(textsToTranslate, name, desc, addr)
+	}
+
+	var translated []string
+	if f.translator != nil && len(textsToTranslate) > 0 {
+		var err error
+		translated, err = f.translator.BatchTranslateToGujarati(f.ctx, textsToTranslate)
+		if err != nil {
+			log.Printf("    ⚠️  Batch translation failed: %v", err)
+			translated = make([]string, len(textsToTranslate))
+		}
+	} else {
+		translated = make([]string, len(textsToTranslate))
+	}
+
+	// Phase 3 & 4: Telegram Notifications and DB Save
+	var recordsToSave []storage.Record
+	for i, res := range results {
+		gujoName := translated[i*3]
+		gujoDesc := translated[i*3+1]
+		gujoAddr := translated[i*3+2]
+
+		gujaratiText := ""
+		if gujoName != "" || gujoDesc != "" || gujoAddr != "" {
+			// Compact format
+			gujaratiText = fmt.Sprintf("👤 %s\n💬 %s\n📍 %s", gujoName, gujoDesc, gujoAddr)
+		}
+
+		prettyJSON, _ := json.MarshalIndent(res.Details, "  ", "  ")
+
+		var messageID string
+		if f.tg != nil {
+			msgID, err := f.tg.SendComplaintMessage(string(prettyJSON), res.ComplaintID, gujaratiText)
+			if err != nil {
+				log.Printf("    ⚠️  Failed to send Telegram msg for %s: %v", res.ComplaintID, err)
+			} else {
+				messageID = msgID
+			}
+		}
+
+		record := storage.Record{
+			ComplaintID:  res.ComplaintID,
+			MessageID:    messageID,
+			APIID:        apiIDMap[res.ComplaintID],
+			ConsumerName: res.ConsumerName,
+		}
+		recordsToSave = append(recordsToSave, record)
+	}
+
+	// Batch save to storage FIRST, so WhatsApp SetWAMessageID rule passes
 	if len(recordsToSave) > 0 {
 		if err := f.storage.SaveMultiple(recordsToSave); err != nil {
 			log.Println("    ⚠️  Failed to save records:", err)
@@ -301,6 +366,59 @@ func (f *Fetcher) processComplaintsConcurrently(complaints []Link) {
 			log.Printf("    ✓ Saved %d new complaints", len(recordsToSave))
 		}
 	}
+
+	// Phase 5: WhatsApp Notifications
+	if f.wa != nil {
+		for i, res := range results {
+			gujoName := translated[i*3]
+			gujoDesc := translated[i*3+1]
+			gujoAddr := translated[i*3+2]
+
+			gujaratiText := ""
+			if gujoName != "" || gujoDesc != "" || gujoAddr != "" {
+				gujaratiText = fmt.Sprintf("👤 %s\n💬 %s\n📍 %s", gujoName, gujoDesc, gujoAddr)
+			}
+
+			waText := buildWhatsAppMessage(res.Details, gujaratiText)
+			if err := f.wa.SendComplaintMessage(waText, res.ComplaintID, f.storage); err != nil {
+				log.Printf("    ⚠️  Failed to send WhatsApp msg for %s: %v", res.ComplaintID, err)
+			}
+		}
+	}
+}
+
+// buildWhatsAppMessage formats complaint details as plain text for WhatsApp.
+func buildWhatsAppMessage(details Details, gujaratiText string) string {
+	str := func(v interface{}) string {
+		if v == nil {
+			return ""
+		}
+		return fmt.Sprintf("%v", v)
+	}
+
+	msg := fmt.Sprintf(
+		"📋 Complaint: %s\n\n"+
+			"👤 %s\n"+
+			"📞 %s\n"+
+			"🆔 Consumer: %s\n"+
+			"📅 %s\n\n"+
+			"💬 Details:\n%s\n"+
+			"📍 %s, %s",
+		str(details.ComplainNo),
+		str(details.ComplainantName),
+		str(details.MobileNo),
+		str(details.ConsumerNo),
+		str(details.ComplainDate),
+		str(details.Description),
+		str(details.ExactLocation),
+		str(details.Area),
+	)
+
+	if gujaratiText != "" {
+		msg += "\n\n" + strings.Repeat("─", 10) + "\n" + gujaratiText
+	}
+
+	return msg
 }
 
 // getNextPageURL finds the URL for the next page in pagination.

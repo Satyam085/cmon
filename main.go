@@ -33,6 +33,7 @@ import (
 	"time"
 	_ "time/tzdata"
 
+	"cmon/internal/api"
 	"cmon/internal/auth"
 	"cmon/internal/browser"
 	"cmon/internal/complaint"
@@ -66,6 +67,9 @@ func main() {
 	log.Printf("✓ Pagination limit: %d pages", cfg.MaxPages)
 	log.Printf("✓ Worker pool size: %d workers", cfg.WorkerPoolSize)
 
+	// Step 1.5: Initialize shared API HTTP client
+	api.InitHTTPClient(cfg)
+
 	// Step 2: Initialize storage (loads existing complaints from CSV)
 	log.Println("📋 Initializing complaint storage...")
 	stor := storage.New()
@@ -83,7 +87,7 @@ func main() {
 
 	// Step 3b: Initialize Gemini Translator (optional)
 	log.Println("🌐 Initializing Gujarati translator...")
-	translator, err := translate.NewTranslator(context.Background(), cfg.GeminiAPIKey)
+	translator, err := translate.NewTranslator(context.Background(), cfg.GeminiAPIKey, cfg)
 	if err != nil {
 		log.Printf("⚠️  Translator init failed (translation disabled): %v", err)
 	}

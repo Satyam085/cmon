@@ -49,10 +49,12 @@ type Details struct {
 //   - ComplaintID: Complaint number that was processed
 //   - MessageID: Telegram message ID (empty if send failed)
 //   - ConsumerName: Name extracted from complaint details
+//   - Details: Extracted JSON details for deferred processing
 //   - Error: Any error that occurred during processing
 type ProcessResult struct {
 	ComplaintID  string
 	MessageID    string
 	ConsumerName string
+	Details      Details
 	Error        error
 }

@@ -57,20 +57,18 @@ type PendingResolution struct {
 // Client represents a Telegram bot client.
 //
 // Thread-safety:
-//   - pendingResolutions map is protected by mutex
 //   - Safe for concurrent access from update handler and main thread
 //
 // Fields:
 //   - BotToken: Telegram bot API token
 //   - ChatID: Target chat ID for notifications
-//   - pendingResolutions: Map of user ID to pending resolution
 //   - DebugMode: If true, skip actual API calls (for testing)
 type Client struct {
-	BotToken           string
-	ChatID             string
-	mu                 sync.Mutex
-	pendingResolutions map[int64]PendingResolution
-	DebugMode          bool
+	BotToken   string
+	ChatID     string
+	mu         sync.Mutex
+	DebugMode  bool
+	lastReqTime time.Time
 }
 
 // Message types for Telegram API
@@ -181,10 +179,9 @@ func NewClient() *Client {
 	}
 
 	return &Client{
-		BotToken:           botToken,
-		ChatID:             chatID,
-		pendingResolutions: make(map[int64]PendingResolution),
-		DebugMode:          debugMode,
+		BotToken:  botToken,
+		ChatID:    chatID,
+		DebugMode: debugMode,
 	}
 }
 
@@ -208,6 +205,15 @@ func (c *Client) doRequest(method string, payload interface{}) (map[string]inter
 	if err != nil {
 		return nil, fmt.Errorf("failed to marshal payload: %w", err)
 	}
+
+	// Rate limiting for Telegram API (max 30 messages/second generally)
+	c.mu.Lock()
+	// Allow 1 request every 35 milliseconds (~28.5 req/sec) to be safe
+	if time.Since(c.lastReqTime) < 35*time.Millisecond {
+		time.Sleep(35*time.Millisecond - time.Since(c.lastReqTime))
+	}
+	c.lastReqTime = time.Now()
+	c.mu.Unlock()
 
 	apiURL := fmt.Sprintf("https://api.telegram.org/bot%s/%s", c.BotToken, method)
 
@@ -601,8 +607,8 @@ func (c *Client) answerCallbackQuery(callbackQueryID string, text string) error 
 // Parameters:
 //   - ctx: Context for cancellation
 //   - browserCtx: Browser context holder for API calls
-//   - storage: Storage for complaint data
-func (c *Client) HandleUpdates(ctx context.Context, browserCtx interface{}, storage *storage.Storage) {
+//   - stor: Storage for complaint data
+func (c *Client) HandleUpdates(ctx context.Context, browserCtx interface{}, stor *storage.Storage) {
 	if c == nil {
 		log.Println("⚠️  Telegram not configured, callback handler disabled")
 		return
@@ -626,9 +632,9 @@ func (c *Client) HandleUpdates(ctx context.Context, browserCtx interface{}, stor
 
 			for _, update := range updates {
 				if update.CallbackQuery != nil {
-					c.handleCallbackQuery(ctx, update.CallbackQuery, storage)
+					c.handleCallbackQuery(ctx, update.CallbackQuery, stor)
 				} else if update.Message != nil {
-					c.handleMessage(ctx, browserCtx, update.Message, storage)
+					c.handleMessage(ctx, browserCtx, update.Message, stor)
 				}
 				offset = update.UpdateID + 1
 			}
@@ -647,8 +653,8 @@ func (c *Client) HandleUpdates(ctx context.Context, browserCtx interface{}, stor
 // Parameters:
 //   - ctx: Context for cancellation
 //   - query: Callback query to process
-//   - storage: Storage for complaint data
-func (c *Client) handleCallbackQuery(ctx context.Context, query *CallbackQuery, storage *storage.Storage) {
+//   - stor: Storage for complaint data
+func (c *Client) handleCallbackQuery(ctx context.Context, query *CallbackQuery, stor *storage.Storage) {
 	log.Printf("📞 Received callback query: %s from %s\n", query.Data, query.From.FirstName)
 
 	// Parse callback data (format: "resolve:COMPLAINT_NUMBER")
@@ -662,7 +668,7 @@ func (c *Client) handleCallbackQuery(ctx context.Context, query *CallbackQuery, 
 	complaintNumber := parts[1]
 
 	// Get message ID for this complaint
-	messageID := storage.GetMessageID(complaintNumber)
+	messageID := stor.GetMessageID(complaintNumber)
 	if messageID == "" {
 		log.Println("⚠️  Message ID not found for complaint")
 		c.answerCallbackQuery(query.ID, "Error: Message not found")
@@ -675,13 +681,12 @@ func (c *Client) handleCallbackQuery(ctx context.Context, query *CallbackQuery, 
 		originalText = query.Message.Text
 	}
 
-	// Store pending resolution
-	c.mu.Lock()
 	// Check if resolution is already pending for this user and complaint (Toggle logic)
-	if pending, exists := c.pendingResolutions[query.From.ID]; exists && pending.ComplaintNumber == complaintNumber {
+	// We use the storage for DB-backed state
+	pending, exists := stor.GetPendingResolution(query.From.ID)
+	if exists && pending.ComplaintNumber == complaintNumber {
 		// User clicked button again -> CANCEL action
-		delete(c.pendingResolutions, query.From.ID)
-		c.mu.Unlock()
+		stor.RemovePendingResolution(query.From.ID)
 
 		// Delete the previous prompt message
 		if pending.PromptMessageID > 0 {
@@ -700,12 +705,12 @@ func (c *Client) handleCallbackQuery(ctx context.Context, query *CallbackQuery, 
 		return
 	}
 
-	c.pendingResolutions[query.From.ID] = PendingResolution{
+	pr := storage.PendingResolution{
 		ComplaintNumber: complaintNumber,
 		MessageID:       messageID,
 		OriginalText:    originalText,
 	}
-	c.mu.Unlock()
+	_ = stor.AddPendingResolution(query.From.ID, pr)
 
 	log.Printf("📝 Requesting resolution note for complaint %s from %s\n", complaintNumber, query.From.FirstName)
 
@@ -756,12 +761,10 @@ func (c *Client) handleCallbackQuery(ctx context.Context, query *CallbackQuery, 
 	}
 
 	// Update pending resolution with prompt message ID
-	c.mu.Lock()
-	if pending, exists := c.pendingResolutions[query.From.ID]; exists {
+	if pending, exists := stor.GetPendingResolution(query.From.ID); exists {
 		pending.PromptMessageID = promptMsgID
-		c.pendingResolutions[query.From.ID] = pending
+		_ = stor.AddPendingResolution(query.From.ID, pending)
 	}
-	c.mu.Unlock()
 
 	c.answerCallbackQuery(query.ID, "Please send your remarks")
 	log.Printf("✓ Prompted %s for remarks\n", query.From.FirstName)
@@ -780,36 +783,32 @@ func (c *Client) handleCallbackQuery(ctx context.Context, query *CallbackQuery, 
 //   - ctx: Context for cancellation
 //   - browserCtx: Browser context for API calls
 //   - message: Incoming message
-//   - storage: Storage for complaint data
-func (c *Client) handleMessage(ctx context.Context, browserCtx interface{}, message *IncomingMessage, storage *storage.Storage) {
+//   - stor: Storage for complaint data
+func (c *Client) handleMessage(ctx context.Context, browserCtx interface{}, message *IncomingMessage, stor *storage.Storage) {
 	if message.From == nil || message.Text == "" {
 		return
 	}
 
 	// Handle /summary command
 	if strings.TrimSpace(message.Text) == "/summary" {
-		c.handleSummaryCommand(ctx, browserCtx, storage)
+		c.handleSummaryCommand(ctx, browserCtx, stor)
 		return
 	}
 
 	// Only process text messages from users with pending resolutions
-	c.mu.Lock()
-	pending, exists := c.pendingResolutions[message.From.ID]
+	pending, exists := stor.GetPendingResolution(message.From.ID)
 	if !exists {
-		c.mu.Unlock()
 		return // No pending resolution for this user
 	}
 
 	// Verify this is a reply to the bot's prompt message (not a random message)
 	// If ReplyToMessage is nil (user typed without replying) or points to a different message, ignore it
 	if message.ReplyToMessage == nil || message.ReplyToMessage.MessageID != pending.PromptMessageID {
-		c.mu.Unlock()
 		return
 	}
 
 	promptMsgID := pending.PromptMessageID
-	delete(c.pendingResolutions, message.From.ID)
-	c.mu.Unlock()
+	stor.RemovePendingResolution(message.From.ID)
 
 	// Delete prompt message to keep chat clean
 	if promptMsgID > 0 {
@@ -838,7 +837,7 @@ func (c *Client) handleMessage(ctx context.Context, browserCtx interface{}, mess
 	log.Printf("📝 Received resolution note from %s for complaint %s\n", message.From.FirstName, pending.ComplaintNumber)
 
 	// Check if complaint still exists
-	if !storage.Exists(pending.ComplaintNumber) {
+	if !stor.Exists(pending.ComplaintNumber) {
 		log.Printf("⚠️  Complaint %s was already resolved\n", pending.ComplaintNumber)
 		errorMsg := Message{
 			ChatID:    c.ChatID,
@@ -850,7 +849,7 @@ func (c *Client) handleMessage(ctx context.Context, browserCtx interface{}, mess
 	}
 
 	// Get API ID for resolution call
-	apiID := storage.GetAPIID(pending.ComplaintNumber)
+	apiID := stor.GetAPIID(pending.ComplaintNumber)
 	if apiID == "" {
 		log.Printf("⚠️  No API ID found for complaint %s\n", pending.ComplaintNumber)
 		errorMsg := Message{
@@ -930,7 +929,7 @@ func (c *Client) handleMessage(ctx context.Context, browserCtx interface{}, mess
 	}
 
 	// Remove from storage
-	removed, err := storage.RemoveIfExists(pending.ComplaintNumber)
+	removed, err := stor.RemoveIfExists(pending.ComplaintNumber)
 	if err != nil {
 		log.Printf("⚠️  Failed to remove from storage: %v\n", err)
 	} else if !removed {

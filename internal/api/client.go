@@ -12,6 +12,7 @@
 package api
 
 import (
+	"cmon/internal/config"
 	"net/http"
 	"time"
 )
@@ -35,12 +36,9 @@ import (
 //   - Better resource utilization
 var sharedClient *http.Client
 
-// init initializes the shared HTTP client with default settings.
-//
-// This runs once when the package is imported, ensuring the client
-// is ready before any API calls are made.
-func init() {
-	sharedClient = NewHTTPClient(30 * time.Second)
+// InitHTTPClient initializes the shared HTTP client with config settings.
+func InitHTTPClient(cfg *config.Config) {
+	sharedClient = NewHTTPClient(cfg)
 }
 
 // GetHTTPClient returns the shared HTTP client instance.
@@ -83,17 +81,17 @@ func GetHTTPClient() *http.Client {
 //   - 2-3x speedup for typical API calls
 //
 // Parameters:
-//   - timeout: Maximum time for a complete request (including reading response)
+//   - cfg: App configuration with timeout and max conns
 //
 // Returns:
 //   - *http.Client: Configured HTTP client
-func NewHTTPClient(timeout time.Duration) *http.Client {
+func NewHTTPClient(cfg *config.Config) *http.Client {
 	return &http.Client{
-		Timeout: timeout,
+		Timeout: cfg.HTTPTimeout,
 		Transport: &http.Transport{
 			// Connection pool settings
-			MaxIdleConns:        100, // Total idle connections
-			MaxIdleConnsPerHost: 10,  // Per-host idle connections
+			MaxIdleConns:        cfg.HTTPMaxConns, // Total idle connections
+			MaxIdleConnsPerHost: cfg.HTTPMaxConns / 10,  // Per-host idle connections
 			IdleConnTimeout:     90 * time.Second,
 
 			// Keep-alive settings

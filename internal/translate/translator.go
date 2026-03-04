@@ -18,7 +18,8 @@ import (
 	"log"
 	"net/http"
 	"strings"
-	"time"
+
+	"cmon/internal/config"
 )
 
 const systemPrompt = `You are a translator for an Indian electricity complaint system.
@@ -40,7 +41,7 @@ type Translator struct {
 // NewTranslator creates a new Gemini-based Translator.
 //
 // Returns nil if apiKey is empty (graceful degradation).
-func NewTranslator(_ context.Context, apiKey string) (*Translator, error) {
+func NewTranslator(_ context.Context, apiKey string, cfg *config.Config) (*Translator, error) {
 	if apiKey == "" {
 		log.Println("⚠️  GEMINI_API_KEY not set. Gujarati translation disabled.")
 		return nil, nil
@@ -51,7 +52,13 @@ func NewTranslator(_ context.Context, apiKey string) (*Translator, error) {
 	return &Translator{
 		apiKey: apiKey,
 		model:  "gemini-2.5-flash",
-		client: &http.Client{Timeout: 15 * time.Second},
+		client: &http.Client{
+			Timeout: cfg.HTTPTimeout,
+			Transport: &http.Transport{
+				MaxIdleConns:        cfg.HTTPMaxConns,
+				MaxIdleConnsPerHost: cfg.HTTPMaxConns / 10,
+			},
+		},
 	}, nil
 }
 
