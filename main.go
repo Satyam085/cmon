@@ -42,6 +42,7 @@ import (
 	"cmon/internal/storage"
 	"cmon/internal/telegram"
 	"cmon/internal/translate"
+	"cmon/internal/whatsapp"
 )
 
 func main() {
@@ -72,6 +73,13 @@ func main() {
 	// Step 3: Initialize Telegram client (optional)
 	log.Println("📱 Initializing Telegram...")
 	tg := telegram.NewClient()
+
+	// Step 3a: Initialize WhatsApp client (optional)
+	log.Println("💬 Initializing WhatsApp...")
+	wa := whatsapp.NewClient()
+	if wa != nil {
+		defer wa.Disconnect()
+	}
 
 	// Step 3b: Initialize Gemini Translator (optional)
 	log.Println("🌐 Initializing Gujarati translator...")
@@ -131,7 +139,7 @@ func main() {
 
 	// Step 9: Initial fetch of complaints
 	log.Println("📬 Fetching complaints...")
-	fetcher := complaint.New(ctxHolder.Get(), stor, tg, cfg, translator)
+	fetcher := complaint.New(ctxHolder.Get(), stor, tg, wa, cfg, translator)
 	activeComplaintIDs, err := fetcher.FetchAll(cfg.ComplaintURL)
 	if err != nil {
 		log.Fatal("❌ Failed to fetch complaints:", err)
@@ -139,7 +147,7 @@ func main() {
 
 	// Step 10: Check for resolved complaints
 	// (complaints in storage but not on website anymore)
-	markResolvedComplaints(ctxHolder.Get(), stor, tg, activeComplaintIDs)
+	markResolvedComplaints(ctxHolder.Get(), stor, tg, wa, activeComplaintIDs)
 
 	// Update health monitor
 	healthMonitor.UpdateFetchStatus("success")
@@ -175,6 +183,7 @@ func main() {
 				cfg.ComplaintURL,
 				stor,
 				tg,
+				wa,
 				cfg.LoginURL,
 				cfg.Username,
 				cfg.Password,
@@ -229,6 +238,7 @@ func fetchWithRetry(
 	complaintURL string,
 	stor *storage.Storage,
 	tg *telegram.Client,
+	wa *whatsapp.Client,
 	loginURL, username, password string,
 	cfg *config.Config,
 	maxRetries int,
@@ -247,13 +257,13 @@ func fetchWithRetry(
 		fetchCtx, fetchCancel := context.WithTimeout(ctxHolder.Get(), fetchTimeout)
 
 		// Attempt to fetch complaints
-		fetcher := complaint.New(fetchCtx, stor, tg, cfg, translator)
+		fetcher := complaint.New(fetchCtx, stor, tg, wa, cfg, translator)
 		activeComplaintIDs, err := fetcher.FetchAll(complaintURL)
 		fetchCancel() // Always cancel timeout context
 
 		if err == nil {
 			// Success! Check for resolved complaints and update health
-			markResolvedComplaints(ctxHolder.Get(), stor, tg, activeComplaintIDs)
+			markResolvedComplaints(ctxHolder.Get(), stor, tg, wa, activeComplaintIDs)
 			healthMonitor.UpdateFetchStatus("success")
 			return nil
 		}
@@ -332,7 +342,7 @@ func fetchWithRetry(
 //   - stor: Storage with previously seen complaints
 //   - tg: Telegram client for editing messages
 //   - activeIDs: List of currently active complaint IDs from website
-func markResolvedComplaints(ctx context.Context, stor *storage.Storage, tg *telegram.Client, activeIDs []string) {
+func markResolvedComplaints(ctx context.Context, stor *storage.Storage, tg *telegram.Client, wa *whatsapp.Client, activeIDs []string) {
 	// Create a map of currently active IDs for O(1) lookup
 	activeIDsMap := make(map[string]bool)
 	for _, id := range activeIDs {
@@ -378,6 +388,19 @@ func markResolvedComplaints(ctx context.Context, stor *storage.Storage, tg *tele
 					} else {
 						log.Printf("✅ Removed resolved complaint %s from storage", complaintID)
 						resolvedCount++
+					}
+				}
+
+				// Also send a plain-text resolved notice on WhatsApp (WA can't edit messages)
+				if wa != nil {
+					waResolvedMsg := fmt.Sprintf(
+						"✅ RESOLVED\n\nComplaint #%s\n👤 %s\n🕐 %s",
+						complaintID,
+						consumerName,
+						time.Now().Format("02 Jan 2006, 03:04 PM"),
+					)
+					if waErr := wa.SendMessage(waResolvedMsg); waErr != nil {
+						log.Printf("⚠️  Failed to send WhatsApp resolved notice for %s: %v", complaintID, waErr)
 					}
 				}
 			}

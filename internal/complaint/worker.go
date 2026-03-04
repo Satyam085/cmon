@@ -6,11 +6,13 @@ import (
 	"encoding/json"
 	"fmt"
 	"log"
+	"strings"
 	"sync"
 	"time"
 
 	"cmon/internal/telegram"
 	"cmon/internal/translate"
+	"cmon/internal/whatsapp"
 
 	"github.com/chromedp/cdproto/runtime"
 	"github.com/chromedp/chromedp"
@@ -36,6 +38,7 @@ type Worker struct {
 	results    chan<- ProcessResult  // Output: Processing results
 	ctx        context.Context       // Browser context for API calls
 	tg         *telegram.Client      // Telegram client for notifications
+	wa         *whatsapp.Client      // WhatsApp client for notifications (can be nil)
 	translator *translate.Translator // Translator for Gujarati (can be nil)
 	wg         *sync.WaitGroup       // WaitGroup for coordinated shutdown
 }
@@ -58,10 +61,10 @@ type Worker struct {
 //   - Job buffer: 100 (prevents blocking when submitting jobs)
 //   - Result buffer: 100 (prevents blocking when collecting results)
 type WorkerPool struct {
-	workers    []*Worker
-	jobs       chan Link
-	results    chan ProcessResult
-	wg         sync.WaitGroup
+	workers     []*Worker
+	jobs        chan Link
+	results     chan ProcessResult
+	wg          sync.WaitGroup
 	workerCount int
 }
 
@@ -80,7 +83,7 @@ type WorkerPool struct {
 //
 // Returns:
 //   - *WorkerPool: Ready-to-use worker pool
-func NewWorkerPool(ctx context.Context, tg *telegram.Client, translator *translate.Translator, workerCount int) *WorkerPool {
+func NewWorkerPool(ctx context.Context, tg *telegram.Client, wa *whatsapp.Client, translator *translate.Translator, workerCount int) *WorkerPool {
 	log.Printf("  → Creating worker pool with %d workers...\n", workerCount)
 
 	pool := &WorkerPool{
@@ -98,6 +101,7 @@ func NewWorkerPool(ctx context.Context, tg *telegram.Client, translator *transla
 			results:    pool.results,
 			ctx:        ctx,
 			tg:         tg,
+			wa:         wa,
 			translator: translator,
 			wg:         &pool.wg,
 		}
@@ -307,6 +311,18 @@ func (w *Worker) processComplaint(complaint Link) ProcessResult {
 		messageID = msgID
 	}
 
+	// Send to WhatsApp if client is configured
+	// WhatsApp does not support HTML, so we strip tags and compose plain text.
+	if w.wa != nil {
+		waText := buildWhatsAppMessage(details, gujaratiText)
+		if err := w.wa.SendMessage(waText); err != nil {
+			// Non-fatal: log warning but don't fail the complaint processing
+			log.Printf("  ⚠️  Failed to send WhatsApp notification for %s: %v", complaint.ComplaintNumber, err)
+		} else {
+			log.Printf("  ✓ WhatsApp notification sent for %s", complaint.ComplaintNumber)
+		}
+	}
+
 	// Add small delay to avoid rate limiting
 	// Telegram API limit: 30 messages/second
 	// With 10 workers: 10 messages/second (safe margin)
@@ -368,4 +384,49 @@ func (w *Worker) buildGujaratiText(details Details) string {
 		translated[1],
 		translated[2],
 	)
+}
+
+// buildWhatsAppMessage formats complaint details as plain text for WhatsApp.
+//
+// WhatsApp does not support HTML formatting, so this produces a clean
+// plain-text version of the complaint notification.
+//
+// Parameters:
+//   - details:      Parsed complaint details
+//   - gujaratiText: Optional Gujarati translation (appended if non-empty)
+//
+// Returns:
+//   - string: Plain-text formatted message
+func buildWhatsAppMessage(details Details, gujaratiText string) string {
+	// Helper to safely extract string from interface{}
+	str := func(v interface{}) string {
+		if v == nil {
+			return ""
+		}
+		return fmt.Sprintf("%v", v)
+	}
+
+	msg := fmt.Sprintf(
+		"📋 Complaint: %s\n\n"+
+			"👤 %s\n"+
+			"📞 %s\n"+
+			"🆔 Consumer: %s\n"+
+			"📅 %s\n\n"+
+			"💬 Details:\n%s\n"+
+			"📍 %s, %s",
+		str(details.ComplainNo),
+		str(details.ComplainantName),
+		str(details.MobileNo),
+		str(details.ConsumerNo),
+		str(details.ComplainDate),
+		str(details.Description),
+		str(details.ExactLocation),
+		str(details.Area),
+	)
+
+	if gujaratiText != "" {
+		msg += "\n\n" + strings.Repeat("─", 10) + "\n" + gujaratiText
+	}
+
+	return msg
 }

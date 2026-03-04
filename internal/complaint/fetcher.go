@@ -10,6 +10,7 @@ import (
 	"cmon/internal/storage"
 	"cmon/internal/telegram"
 	"cmon/internal/translate"
+	"cmon/internal/whatsapp"
 
 	"github.com/chromedp/chromedp"
 )
@@ -36,6 +37,7 @@ type Fetcher struct {
 	ctx        context.Context
 	storage    *storage.Storage
 	tg         *telegram.Client
+	wa         *whatsapp.Client
 	cfg        *config.Config
 	translator *translate.Translator
 }
@@ -50,11 +52,12 @@ type Fetcher struct {
 //
 // Returns:
 //   - *Fetcher: Ready-to-use fetcher instance
-func New(ctx context.Context, storage *storage.Storage, tg *telegram.Client, cfg *config.Config, translator *translate.Translator) *Fetcher {
+func New(ctx context.Context, storage *storage.Storage, tg *telegram.Client, wa *whatsapp.Client, cfg *config.Config, translator *translate.Translator) *Fetcher {
 	return &Fetcher{
 		ctx:        ctx,
 		storage:    storage,
 		tg:         tg,
+		wa:         wa,
 		cfg:        cfg,
 		translator: translator,
 	}
@@ -261,7 +264,7 @@ func (f *Fetcher) processComplaintsConcurrently(complaints []Link) {
 	}
 
 	// Create worker pool
-	pool := NewWorkerPool(f.ctx, f.tg, f.translator, f.cfg.WorkerPoolSize)
+	pool := NewWorkerPool(f.ctx, f.tg, f.wa, f.translator, f.cfg.WorkerPoolSize)
 
 	// Submit all jobs
 	go func() {

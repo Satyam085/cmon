@@ -65,6 +65,10 @@ type Config struct {
 	TelegramBotToken string // Telegram bot API token
 	TelegramChatID   string // Telegram chat ID for notifications
 
+	// WhatsApp configuration (optional)
+	WhatsAppRecipientJID string // Target JID, e.g. 919876543210@s.whatsapp.net
+	WhatsAppDBPath       string // Path to SQLite session DB (default: whatsapp.db)
+
 	// Health check server configuration
 	HealthCheckPort string // Port for health check HTTP server
 
@@ -143,6 +147,10 @@ func LoadConfig() (*Config, error) {
 		// Telegram - optional, notifications disabled if not set
 		TelegramBotToken: os.Getenv("TELEGRAM_BOT_TOKEN"),
 		TelegramChatID:   os.Getenv("TELEGRAM_CHAT_ID"),
+
+		// WhatsApp - optional, notifications disabled if not set
+		WhatsAppRecipientJID: os.Getenv("WHATSAPP_RECIPIENT_JID"),
+		WhatsAppDBPath:       getEnvOrDefault("WHATSAPP_DB_PATH", "whatsapp.db"),
 
 		// Health check - default port 8080
 		HealthCheckPort: getEnvOrDefault("HEALTH_CHECK_PORT", "8080"),
