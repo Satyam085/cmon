@@ -2,51 +2,28 @@
 package complaint
 
 import (
-	"context"
 	"encoding/json"
 	"fmt"
 	"log"
 	"sync"
 	"time"
 
-	"github.com/chromedp/cdproto/runtime"
-	"github.com/chromedp/chromedp"
+	"cmon/internal/session"
 )
 
 // Worker represents a single worker in the complaint processing pool.
 //
-// Architecture:
-//   - Each worker runs in its own goroutine
-//   - Workers pull jobs from a shared channel
-//   - Results are sent to a results channel
-//   - Errors are logged but don't stop the worker
-//
-// Lifecycle:
-//   1. Start: Begin listening on jobs channel
-//   2. Process: Fetch details via chromedp
-//   3. Result: Send result to results channel
-//   4. Repeat: Continue until jobs channel closes
-//   5. Stop: Exit when jobs channel is closed
+// Workers now use an HTTP session client instead of a ChromeDP browser context.
+// They make direct authenticated API calls via session.Client.GetJSON().
 type Worker struct {
-	id         int                   // Worker ID for logging
-	jobs       <-chan Link           // Input: Complaints to process
-	results    chan<- ProcessResult  // Output: Processing results
-	ctx        context.Context       // Browser context for API calls
-	wg         *sync.WaitGroup       // WaitGroup for coordinated shutdown
+	id      int
+	jobs    <-chan Link
+	results chan<- ProcessResult
+	sc      *session.Client
+	wg      *sync.WaitGroup
 }
 
 // WorkerPool manages a pool of concurrent complaint processing workers.
-//
-// Benefits of worker pool:
-//   - Controlled concurrency (prevents overwhelming the server)
-//   - Resource reuse (workers stay alive between jobs)
-//   - Backpressure handling (buffered job channel)
-//   - Graceful shutdown (wait for all workers to finish)
-//
-// Configuration:
-//   - Worker count: Configurable via config (default: 10)
-//   - Job buffer: 100 (prevents blocking when submitting jobs)
-//   - Result buffer: 100 (prevents blocking when collecting results)
 type WorkerPool struct {
 	workers     []*Worker
 	jobs        chan Link
@@ -58,35 +35,28 @@ type WorkerPool struct {
 // NewWorkerPool creates a new worker pool for concurrent complaint processing.
 //
 // Parameters:
-//   - ctx: Browser context for API calls
+//   - sc: Authenticated session client (shared across all workers)
 //   - workerCount: Number of concurrent workers
-//
-// Returns:
-//   - *WorkerPool: Ready-to-use worker pool
-func NewWorkerPool(ctx context.Context, workerCount int) *WorkerPool {
+func NewWorkerPool(sc *session.Client, workerCount int) *WorkerPool {
 	log.Printf("  → Creating worker pool with %d workers...\n", workerCount)
 
 	pool := &WorkerPool{
 		workers:     make([]*Worker, workerCount),
-		jobs:        make(chan Link, 100),          // Buffer 100 jobs
-		results:     make(chan ProcessResult, 100), // Buffer 100 results
+		jobs:        make(chan Link, 100),
+		results:     make(chan ProcessResult, 100),
 		workerCount: workerCount,
 	}
 
-	// Create and start workers
 	for i := 0; i < workerCount; i++ {
 		worker := &Worker{
-			id:         i + 1,
-			jobs:       pool.jobs,
-			results:    pool.results,
-			ctx:        ctx,
-			wg:         &pool.wg,
+			id:      i + 1,
+			jobs:    pool.jobs,
+			results: pool.results,
+			sc:      sc,
+			wg:      &pool.wg,
 		}
-
 		pool.workers[i] = worker
 		pool.wg.Add(1)
-
-		// Start worker in goroutine
 		go worker.start()
 	}
 
@@ -101,9 +71,9 @@ func (p *WorkerPool) Submit(complaint Link) {
 
 // Close closes the job channel and waits for all workers to finish.
 func (p *WorkerPool) Close() {
-	close(p.jobs)    // No more jobs will be submitted
-	p.wg.Wait()      // Wait for all workers to finish
-	close(p.results) // No more results will be sent
+	close(p.jobs)
+	p.wg.Wait()
+	close(p.results)
 }
 
 // Results returns the results channel for collecting processed complaints.
@@ -114,62 +84,27 @@ func (p *WorkerPool) Results() <-chan ProcessResult {
 // start begins the worker's processing loop.
 func (w *Worker) start() {
 	defer w.wg.Done()
-
-	// Process jobs until channel closes
 	for job := range w.jobs {
-		// Process the complaint
 		result := w.processComplaint(job)
-
-		// Send result
 		w.results <- result
-
 		if result.Error != nil {
 			log.Printf("  [Worker #%d] ✗ Failed to process %s: %v\n", w.id, job.ComplaintNumber, result.Error)
 		}
 	}
 }
 
-// processComplaint fetches complaint details.
+// processComplaint fetches complaint details via an authenticated HTTP GET.
 //
 // Processing flow:
-//   1. Build API URL with complaint's API ID
-//   2. Fetch complaint details via browser (uses session cookies)
-//   3. Parse JSON response
-//   4. Extract consumer name
-//   5. Return result with Details struct to be processed later
-//
-// Parameters:
-//   - complaint: Complaint link with API ID
-//
-// Returns:
-//   - ProcessResult: Result containing the details or error
+//  1. Build API URL with complaint's API ID
+//  2. GET complaint details via session client (session cookie sent automatically)
+//  3. Parse JSON response
+//  4. Extract consumer name
+//  5. Return result with Details struct
 func (w *Worker) processComplaint(complaint Link) ProcessResult {
-	// Build API URL
 	apiURL := fmt.Sprintf("https://complaint.dgvcl.com/api/complaint-record/%s", complaint.APIID)
 
-	var jsonResponse string
-
-	// Create context with timeout for worker to prevent silent cancellations
-	workerCtx, cancel := context.WithTimeout(w.ctx, 30*time.Second)
-	defer cancel()
-
-	apiURLJSON, _ := json.Marshal(apiURL)
-
-	// Fetch complaint details using browser context
-	err := chromedp.Run(workerCtx,
-		chromedp.Evaluate(fmt.Sprintf(`
-			(async function() {
-				const response = await fetch(%s, {
-					headers: { 'X-Requested-With': 'XMLHttpRequest' }
-				});
-				if (!response.ok) throw new Error('HTTP status ' + response.status);
-				return await response.text();
-			})()
-		`, apiURLJSON), &jsonResponse, func(p *runtime.EvaluateParams) *runtime.EvaluateParams {
-			return p.WithAwaitPromise(true)
-		}),
-	)
-
+	body, err := w.sc.GetJSON(apiURL)
 	if err != nil {
 		return ProcessResult{
 			ComplaintID: complaint.ComplaintNumber,
@@ -177,49 +112,46 @@ func (w *Worker) processComplaint(complaint Link) ProcessResult {
 		}
 	}
 
-	if jsonResponse == "" {
+	if len(body) == 0 {
 		return ProcessResult{
 			ComplaintID: complaint.ComplaintNumber,
 			Error:       fmt.Errorf("API returned empty response"),
 		}
 	}
 
-	// Parse JSON response
 	var fullData map[string]interface{}
-	if err := json.Unmarshal([]byte(jsonResponse), &fullData); err != nil {
+	if err := json.Unmarshal(body, &fullData); err != nil {
 		return ProcessResult{
 			ComplaintID: complaint.ComplaintNumber,
 			Error:       fmt.Errorf("failed to parse JSON: %w", err),
 		}
 	}
 
-	// Extract complaint details from nested structure
-	var details Details
-	if complaintDetail, ok := fullData["complaintdetail"].(map[string]interface{}); ok {
-		details = Details{
-			ComplainNo:      complaintDetail["complain_no"],
-			ConsumerNo:      complaintDetail["consumer_no"],
-			ComplainantName: complaintDetail["complainant_name"],
-			MobileNo:        complaintDetail["mobile_no"],
-			Description:     complaintDetail["description"],
-			ComplainDate:    complaintDetail["complain_date"],
-			ExactLocation:   complaintDetail["exact_location"],
-			Area:            complaintDetail["area"],
-		}
-	} else {
+	complaintDetail, ok := fullData["complaintdetail"].(map[string]interface{})
+	if !ok {
 		return ProcessResult{
 			ComplaintID: complaint.ComplaintNumber,
 			Error:       fmt.Errorf("complaintdetail missing in API response"),
 		}
 	}
 
-	// Extract consumer name for storage
+	details := Details{
+		ComplainNo:      complaintDetail["complain_no"],
+		ConsumerNo:      complaintDetail["consumer_no"],
+		ComplainantName: complaintDetail["complainant_name"],
+		MobileNo:        complaintDetail["mobile_no"],
+		Description:     complaintDetail["description"],
+		ComplainDate:    complaintDetail["complain_date"],
+		ExactLocation:   complaintDetail["exact_location"],
+		Area:            complaintDetail["area"],
+	}
+
 	consumerName := "Unknown"
 	if details.ComplainantName != nil {
 		consumerName = fmt.Sprintf("%v", details.ComplainantName)
 	}
 
-	// Add small delay to avoid overwhelming the target server locally
+	// Small delay to avoid overwhelming the server
 	time.Sleep(100 * time.Millisecond)
 
 	return ProcessResult{

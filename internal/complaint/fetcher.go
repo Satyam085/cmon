@@ -6,38 +6,30 @@ import (
 	"encoding/json"
 	"fmt"
 	"log"
+	"regexp"
 	"strings"
+	"time"
 
 	"cmon/internal/config"
 	"cmon/internal/errors"
+	"cmon/internal/session"
 	"cmon/internal/storage"
 	"cmon/internal/telegram"
 	"cmon/internal/translate"
 	"cmon/internal/whatsapp"
 
-	"github.com/chromedp/chromedp"
+	"github.com/PuerkitoBio/goquery"
 )
 
 // Fetcher orchestrates the complaint fetching process with concurrent processing.
 //
 // Architecture:
-//   - Main thread: Navigates pages and scrapes complaint links
-//   - Worker pool: Processes complaints concurrently
+//   - Main thread: Navigates pages and scrapes complaint links via HTTP + goquery
+//   - Worker pool: Processes complaints concurrently via HTTP API calls
 //   - Storage: Deduplicates and persists data
 //   - Telegram: Sends notifications
-//
-// Flow:
-//   1. Navigate to dashboard
-//   2. For each page (up to MaxPages):
-//      a. Scrape complaint links from table
-//      b. Filter new complaints (not in storage)
-//      c. Submit new complaints to worker pool
-//      d. Workers fetch details and send to Telegram concurrently
-//      e. Collect results and save to storage in batches
-//      f. Navigate to next page
-//   3. Return all active complaint IDs found
 type Fetcher struct {
-	ctx        context.Context
+	sc         *session.Client
 	storage    *storage.Storage
 	tg         *telegram.Client
 	wa         *whatsapp.Client
@@ -46,18 +38,9 @@ type Fetcher struct {
 }
 
 // New creates a new complaint fetcher.
-//
-// Parameters:
-//   - ctx: Browser context for automation
-//   - storage: Storage for deduplication and persistence
-//   - tg: Telegram client for notifications
-//   - cfg: Application configuration
-//
-// Returns:
-//   - *Fetcher: Ready-to-use fetcher instance
-func New(ctx context.Context, storage *storage.Storage, tg *telegram.Client, wa *whatsapp.Client, cfg *config.Config, translator *translate.Translator) *Fetcher {
+func New(sc *session.Client, storage *storage.Storage, tg *telegram.Client, wa *whatsapp.Client, cfg *config.Config, translator *translate.Translator) *Fetcher {
 	return &Fetcher{
-		ctx:        ctx,
+		sc:         sc,
 		storage:    storage,
 		tg:         tg,
 		wa:         wa,
@@ -67,18 +50,6 @@ func New(ctx context.Context, storage *storage.Storage, tg *telegram.Client, wa 
 }
 
 // FetchAll fetches all complaints from the dashboard with pagination.
-//
-// This is the main entry point for complaint fetching.
-//
-// Concurrency model:
-//   - Page navigation: Sequential (one page at a time)
-//   - Complaint processing: Concurrent (worker pool)
-//   - Storage writes: Batched for efficiency
-//
-// Error handling:
-//   - Session expiry: Returns SessionExpiredError
-//   - Navigation timeout: Returns FetchError
-//   - Individual complaint failures: Logged but don't stop processing
 //
 // Parameters:
 //   - baseURL: Dashboard URL to start fetching from
@@ -91,38 +62,27 @@ func (f *Fetcher) FetchAll(baseURL string) ([]string, error) {
 
 	log.Println("  → Navigating to complaints dashboard...")
 
-	// Step 1: Initial navigation with timeout
-	navCtx, navCancel := context.WithTimeout(f.ctx, f.cfg.NavigationTimeout)
-	err := chromedp.Run(navCtx, chromedp.Navigate(baseURL))
-	navCancel()
-
+	// Fetch first page
+	doc, err := f.sc.GetDoc(baseURL)
 	if err != nil {
-		log.Printf("  ✗ Navigation timeout/error after %v: %v", f.cfg.NavigationTimeout, err)
-		// Check if session expired (redirected to login)
-		if isSessionExpired(f.ctx) {
-			return nil, errors.NewSessionExpiredError("dashboard navigation failed")
-		}
+		log.Printf("  ✗ Failed to fetch dashboard: %v", err)
 		return nil, errors.NewFetchError("failed to navigate to dashboard", err)
 	}
 
-	// Wait for table to be visible
-	waitCtx, waitCancel := context.WithTimeout(f.ctx, f.cfg.WaitTimeout)
-	err = chromedp.Run(waitCtx, chromedp.WaitVisible("#dataTable", chromedp.ByID))
-	waitCancel()
-
-	if err != nil {
-		log.Printf("  ✗ Wait timeout/error after %v: %v", f.cfg.WaitTimeout, err)
-		if isSessionExpired(f.ctx) {
-			return nil, errors.NewSessionExpiredError("dashboard not visible")
-		}
-		return nil, errors.NewFetchError("failed to load dashboard table", err)
+	// Session expiry check: login form present in returned HTML
+	if doc.Find("#email_or_username").Length() > 0 {
+		return nil, errors.NewSessionExpiredError("dashboard navigation showed login form")
 	}
+
+	// Verify table is present
+	if doc.Find("#dataTable").Length() == 0 {
+		return nil, errors.NewFetchError("dashboard loaded but #dataTable not found", nil)
+	}
+
 	log.Println("  ✓ Dashboard loaded")
 
-	// Step 2: Process pages with pagination
 	currentPage := 1
 	for {
-		// Check page limit
 		if currentPage > f.cfg.MaxPages {
 			log.Printf("🛑 Reached maximum page limit (%d). Stopping.", f.cfg.MaxPages)
 			break
@@ -130,46 +90,30 @@ func (f *Fetcher) FetchAll(baseURL string) ([]string, error) {
 
 		log.Printf("📄 Processing Page %d...", currentPage)
 
-		// Scrape current page
-		pageIDs, err := f.scrapePage()
+		pageIDs, err := f.scrapePage(doc)
 		if err != nil {
 			log.Printf("  ⚠️  Error scraping page %d: %v", currentPage, err)
 			break
 		}
-
 		allActiveComplaintIDs = append(allActiveComplaintIDs, pageIDs...)
 
-		// Find next page URL
-		nextURL, err := f.getNextPageURL()
-		if err != nil {
-			log.Printf("  ⚠️  Error finding next page URL: %v", err)
-			break
-		}
-
+		// Find next page URL from current document
+		nextURL := getNextPageURL(doc)
 		if nextURL == "" {
 			log.Println("✅ Reached last page (No valid 'Next' link found)")
 			break
 		}
 
-		// Navigate to next page
 		log.Printf("  → Navigating to next page...")
-		navCtx, navCancel := context.WithTimeout(f.ctx, f.cfg.NavigationTimeout)
-		err = chromedp.Run(navCtx, chromedp.Navigate(nextURL))
-		navCancel()
-
+		doc, err = f.sc.GetDoc(nextURL)
 		if err != nil {
-			log.Printf("  ⚠️  Navigation timeout/error after %v: %v", f.cfg.NavigationTimeout, err)
+			log.Printf("  ⚠️  Failed to fetch next page: %v", err)
 			break
 		}
 
-		// Wait for table
-		waitCtx, waitCancel := context.WithTimeout(f.ctx, f.cfg.WaitTimeout)
-		err = chromedp.Run(waitCtx, chromedp.WaitVisible("#dataTable", chromedp.ByID))
-		waitCancel()
-
-		if err != nil {
-			log.Printf("  ⚠️  Wait timeout/error after %v: %v", f.cfg.WaitTimeout, err)
-			break
+		// Session check on each new page
+		if doc.Find("#email_or_username").Length() > 0 {
+			return nil, errors.NewSessionExpiredError("session expired during pagination")
 		}
 
 		currentPage++
@@ -179,68 +123,29 @@ func (f *Fetcher) FetchAll(baseURL string) ([]string, error) {
 	return allActiveComplaintIDs, nil
 }
 
-// scrapePage extracts and processes complaints from the current page.
-//
-// Processing pipeline:
-//   1. Extract complaint links from DOM
-//   2. Filter new complaints (not in storage)
-//   3. Create worker pool for concurrent processing
-//   4. Submit complaints to workers
-//   5. Collect results
-//   6. Batch save to storage
-//
-// Returns:
-//   - []string: List of complaint IDs found on this page
-//   - error: Scraping or processing error
-func (f *Fetcher) scrapePage() ([]string, error) {
-	var complaintLinks []Link
-
-	// Extract complaint links from table using JavaScript
-	// This is faster than using ChromeDP's DOM queries
-	err := chromedp.Run(f.ctx,
-		chromedp.Evaluate(`
-			Array.from(document.querySelectorAll("#dataTable tbody tr")).map(row => {
-				const link = row.querySelector('a[onclick*="openModelData"]');
-				if (link) {
-					const complaintNumber = link.innerText.trim();
-					const onclickAttr = link.getAttribute('onclick');
-					const match = onclickAttr.match(/openModelData\((\d+)\)/);
-					const apiId = match ? match[1].toString() : '';
-					return { ComplaintNumber: complaintNumber, APIID: apiId };
-				}
-				return null;
-			}).filter(x => x !== null && x.APIID !== '')
-		`, &complaintLinks),
-	)
-	if err != nil {
-		return nil, err
-	}
-
+// scrapePage extracts links from the current page and processes new complaints.
+func (f *Fetcher) scrapePage(doc *goquery.Document) ([]string, error) {
+	complaintLinks := extractLinks(doc)
 	log.Println("    → Found", len(complaintLinks), "complaints on this page")
 
-	// Collect all IDs for return value
 	var allIDsOnPage []string
 	var newComplaints []Link
 
-	// Deduplicate and filter new complaints
 	seenOnPage := make(map[string]bool)
 	for _, complaint := range complaintLinks {
 		allIDsOnPage = append(allIDsOnPage, complaint.ComplaintNumber)
 
-		// Skip duplicates on same page
 		if seenOnPage[complaint.ComplaintNumber] {
 			continue
 		}
 		seenOnPage[complaint.ComplaintNumber] = true
 
-		// Check if new (not in storage)
 		if f.storage.IsNew(complaint.ComplaintNumber) {
 			newComplaints = append(newComplaints, complaint)
 			log.Println("    🆕 New Complaint -", complaint.ComplaintNumber)
 		}
 	}
 
-	// Process new complaints concurrently if any found
 	if len(newComplaints) > 0 {
 		f.processComplaintsConcurrently(newComplaints)
 	}
@@ -249,37 +154,21 @@ func (f *Fetcher) scrapePage() ([]string, error) {
 }
 
 // processComplaintsConcurrently processes complaints using a worker pool.
-//
-// Concurrency flow:
-//   1. Create worker pool with configured number of workers
-//   2. Submit all complaints to job queue
-//   3. Close job queue (signals no more jobs)
-//   4. Collect results from workers
-//   5. Batch translate all collected complaint details
-//   6. Send Telegram notifications and save to DB
-//   7. Send WhatsApp notifications (deferred until DB save)
-//
-// Parameters:
-//   - complaints: List of new complaints to process
 func (f *Fetcher) processComplaintsConcurrently(complaints []Link) {
-	// Create map to lookup API ID by complaint number
 	apiIDMap := make(map[string]string)
 	for _, c := range complaints {
 		apiIDMap[c.ComplaintNumber] = c.APIID
 	}
 
-	// Create worker pool
-	pool := NewWorkerPool(f.ctx, f.cfg.WorkerPoolSize)
+	pool := NewWorkerPool(f.sc, f.cfg.WorkerPoolSize)
 
-	// Submit all jobs
 	go func() {
 		for _, complaint := range complaints {
 			pool.Submit(complaint)
 		}
-		pool.Close() // Signal no more jobs
+		pool.Close()
 	}()
 
-	// Collect results
 	var results []ProcessResult
 	for result := range pool.Results() {
 		if result.Error != nil {
@@ -293,7 +182,6 @@ func (f *Fetcher) processComplaintsConcurrently(complaints []Link) {
 		return
 	}
 
-	// Helper to safely get string value from interface{}
 	safeStr := func(v interface{}) string {
 		if v == nil {
 			return ""
@@ -301,39 +189,43 @@ func (f *Fetcher) processComplaintsConcurrently(complaints []Link) {
 		return fmt.Sprintf("%v", v)
 	}
 
-	// Phase 2: Batch Translation
-	var textsToTranslate []string
-	for _, res := range results {
+	// Phase 2: Translate each complaint individually.
+	// BatchTranslateToGujarati takes exactly 3 texts [name, desc, addr] for ONE complaint.
+	type translationResult struct {
+		name, desc, addr string
+	}
+	translations := make([]translationResult, len(results))
+
+	for i, res := range results {
 		name := safeStr(res.Details.ComplainantName)
 		desc := safeStr(res.Details.Description)
 		loc := safeStr(res.Details.ExactLocation)
 		area := safeStr(res.Details.Area)
 		addr := fmt.Sprintf("%s, %s", loc, area)
-		textsToTranslate = append(textsToTranslate, name, desc, addr)
-	}
 
-	var translated []string
-	if f.translator != nil && len(textsToTranslate) > 0 {
-		var err error
-		translated, err = f.translator.BatchTranslateToGujarati(f.ctx, textsToTranslate)
-		if err != nil {
-			log.Printf("    ⚠️  Batch translation failed: %v", err)
-			translated = make([]string, len(textsToTranslate))
+		if f.translator != nil {
+			texts := []string{name, desc, addr}
+			out, err := f.translator.BatchTranslateToGujarati(context.Background(), texts)
+			if err != nil {
+				log.Printf("    ⚠️  Translation failed for %s: %v", res.ComplaintID, err)
+				translations[i] = translationResult{name, desc, addr}
+			} else {
+				translations[i] = translationResult{out[0], out[1], out[2]}
+			}
+		} else {
+			translations[i] = translationResult{name, desc, addr}
 		}
-	} else {
-		translated = make([]string, len(textsToTranslate))
 	}
 
 	// Phase 3 & 4: Telegram Notifications and DB Save
 	var recordsToSave []storage.Record
 	for i, res := range results {
-		gujoName := translated[i*3]
-		gujoDesc := translated[i*3+1]
-		gujoAddr := translated[i*3+2]
+		gujoName := translations[i].name
+		gujoDesc := translations[i].desc
+		gujoAddr := translations[i].addr
 
 		gujaratiText := ""
 		if gujoName != "" || gujoDesc != "" || gujoAddr != "" {
-			// Compact format
 			gujaratiText = fmt.Sprintf("👤 %s\n💬 %s\n📍 %s", gujoName, gujoDesc, gujoAddr)
 		}
 
@@ -358,7 +250,7 @@ func (f *Fetcher) processComplaintsConcurrently(complaints []Link) {
 		recordsToSave = append(recordsToSave, record)
 	}
 
-	// Batch save to storage FIRST, so WhatsApp SetWAMessageID rule passes
+	// Batch save to storage FIRST
 	if len(recordsToSave) > 0 {
 		if err := f.storage.SaveMultiple(recordsToSave); err != nil {
 			log.Println("    ⚠️  Failed to save records:", err)
@@ -368,11 +260,18 @@ func (f *Fetcher) processComplaintsConcurrently(complaints []Link) {
 	}
 
 	// Phase 5: WhatsApp Notifications
+	// Sends are intentionally sequential with a 1s gap between each one.
+	// whatsmeow prefetches encryption sessions from its internal SQLite DB when
+	// sending — firing multiple sends too quickly causes SQLITE_BUSY contention.
 	if f.wa != nil {
 		for i, res := range results {
-			gujoName := translated[i*3]
-			gujoDesc := translated[i*3+1]
-			gujoAddr := translated[i*3+2]
+			if i > 0 {
+				time.Sleep(1 * time.Second)
+			}
+
+			gujoName := translations[i].name
+			gujoDesc := translations[i].desc
+			gujoAddr := translations[i].addr
 
 			gujaratiText := ""
 			if gujoName != "" || gujoDesc != "" || gujoAddr != "" {
@@ -385,6 +284,7 @@ func (f *Fetcher) processComplaintsConcurrently(complaints []Link) {
 			}
 		}
 	}
+
 }
 
 // buildWhatsAppMessage formats complaint details as plain text for WhatsApp.
@@ -421,58 +321,54 @@ func buildWhatsAppMessage(details Details, gujaratiText string) string {
 	return msg
 }
 
+// onclickRe matches the API ID from onclick="openModelData(12345)"
+var onclickRe = regexp.MustCompile(`openModelData\((\d+)\)`)
+
+// extractLinks extracts complaint number + API ID pairs from the #dataTable rows.
+func extractLinks(doc *goquery.Document) []Link {
+	var links []Link
+	doc.Find("#dataTable tbody tr").Each(func(_ int, row *goquery.Selection) {
+		anchor := row.Find(`a[onclick*="openModelData"]`)
+		if anchor.Length() == 0 {
+			return
+		}
+		complaintNumber := strings.TrimSpace(anchor.Text())
+		onclick := anchor.AttrOr("onclick", "")
+		m := onclickRe.FindStringSubmatch(onclick)
+		if len(m) < 2 || complaintNumber == "" {
+			return
+		}
+		links = append(links, Link{
+			ComplaintNumber: complaintNumber,
+			APIID:           m[1],
+		})
+	})
+	return links
+}
+
 // getNextPageURL finds the URL for the next page in pagination.
 //
 // Detection strategy:
-//   1. Look for <a rel="next"> (standard pagination)
-//   2. Look for pagination links with text "›", "Next", or "»"
-//   3. Return empty string if no next page found
-//
-// Returns:
-//   - string: URL of next page, or empty if last page
-//   - error: JavaScript evaluation error
-func (f *Fetcher) getNextPageURL() (string, error) {
+//  1. Look for <a rel="next">
+//  2. Look for pagination links with text "›", "Next", or "»"
+//  3. Return empty string if no next page found
+func getNextPageURL(doc *goquery.Document) string {
+	// Strategy 1: standard rel="next"
+	if href, exists := doc.Find(`a[rel="next"]`).Attr("href"); exists && href != "" {
+		return href
+	}
+
+	// Strategy 2: pagination link by visible text
 	var nextURL string
-
-	err := chromedp.Run(f.ctx,
-		chromedp.Evaluate(`
-			(function() {
-				// Try standard rel="next" first
-				const realNextLink = document.querySelector('a[rel="next"]');
-				if (realNextLink && realNextLink.href) {
-					return realNextLink.href;
-				}
-				
-				// Fallback: Look for pagination links
-				const pageLinks = Array.from(document.querySelectorAll('ul.pagination li:not(.disabled) a.page-link'));
-				for (let link of pageLinks) {
-					const text = link.innerText.trim();
-					if (text === '›' || text === 'Next' || text === '»') {
-						return link.href;
-					}
-				}
-				
-				return "";
-			})()
-		`, &nextURL),
-	)
-
-	return nextURL, err
-}
-
-// isSessionExpired checks if the current page indicates session expiration.
-//
-// This is a helper function that wraps the auth package's IsSessionExpired.
-//
-// Parameters:
-//   - ctx: Browser context to check
-//
-// Returns:
-//   - bool: true if session expired, false if still valid
-func isSessionExpired(ctx context.Context) bool {
-	var loginFormExists bool
-	err := chromedp.Run(ctx,
-		chromedp.Evaluate(`document.querySelector("#email_or_username") !== null`, &loginFormExists),
-	)
-	return err == nil && loginFormExists
+	doc.Find("ul.pagination li:not(.disabled) a.page-link").EachWithBreak(func(_ int, a *goquery.Selection) bool {
+		text := strings.TrimSpace(a.Text())
+		if text == "›" || text == "Next" || text == "»" {
+			if href, ok := a.Attr("href"); ok && href != "" {
+				nextURL = href
+				return false
+			}
+		}
+		return true
+	})
+	return nextURL
 }

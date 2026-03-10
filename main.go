@@ -11,15 +11,15 @@
 //
 // Flow:
 //  1. Load configuration and initialize components
-//  2. Login to DGVCL portal
+//  2. Login to DGVCL portal via HTTP (no browser required)
 //  3. Initial fetch of complaints
 //  4. Start periodic refresh loop (every 15 minutes by default)
-//  5. Handle errors with retry logic and browser restart
+//  5. Handle errors with retry logic and session reset
 //  6. Graceful shutdown on SIGTERM/SIGINT
 //
 // Error recovery strategy:
 //   - Session expired → Re-login
-//   - Re-login failed → Restart browser and re-login
+//   - Re-login failed → Reset session (new cookie jar) and re-login
 //   - All retries failed → Send critical alert to Telegram
 package main
 
@@ -35,11 +35,11 @@ import (
 
 	"cmon/internal/api"
 	"cmon/internal/auth"
-	"cmon/internal/browser"
 	"cmon/internal/complaint"
 	"cmon/internal/config"
 	"cmon/internal/errors"
 	"cmon/internal/health"
+	"cmon/internal/session"
 	"cmon/internal/storage"
 	"cmon/internal/telegram"
 	"cmon/internal/translate"
@@ -48,14 +48,12 @@ import (
 
 func main() {
 	// Force Indian Standard Time (IST) for all time operations
-	// This ensures consistent timestamps regardless of server timezone
 	ist, err := time.LoadLocation("Asia/Kolkata")
 	if err != nil {
 		log.Fatal("❌ Failed to load IST timezone:", err)
 	}
 	time.Local = ist
 
-	// Application startup
 	log.Println("🚀 Starting CMON application...")
 
 	// Step 1: Load configuration from environment variables
@@ -70,7 +68,7 @@ func main() {
 	// Step 1.5: Initialize shared API HTTP client
 	api.InitHTTPClient(cfg)
 
-	// Step 2: Initialize storage (loads existing complaints from CSV)
+	// Step 2: Initialize storage
 	log.Println("📋 Initializing complaint storage...")
 	stor := storage.New()
 
@@ -101,18 +99,20 @@ func main() {
 	// Step 5: Start health check server in background
 	health.StartServer(healthMonitor, cfg.HealthCheckPort)
 
-	// Step 6: Initialize browser context
-	log.Println("🌐 Initializing browser context...")
-	ctxHolder := browser.NewContextHolder()
-	defer ctxHolder.Cancel()
-	log.Println("✓ Browser context created")
+	// Step 6: Create authenticated session client (replaces browser context)
+	log.Println("🌐 Initializing HTTP session client...")
+	sc, err := session.New()
+	if err != nil {
+		log.Fatal("❌ Failed to create session client:", err)
+	}
+	log.Println("✓ Session client created")
 
 	// Step 7: Start Telegram callback handler if configured
 	if tg != nil {
 		callbackCtx, callbackCancel := context.WithCancel(context.Background())
 		defer callbackCancel()
 
-		go tg.HandleUpdates(callbackCtx, ctxHolder, stor)
+		go tg.HandleUpdates(callbackCtx, sc, stor)
 		log.Println("✓ Telegram callback handler started")
 	}
 
@@ -121,7 +121,7 @@ func main() {
 		waCtx, waCancel := context.WithCancel(context.Background())
 		defer waCancel()
 
-		go wa.HandleEvents(waCtx, ctxHolder, stor, cfg.WhatsAppResolveEnabled, cfg.DebugMode)
+		go wa.HandleEvents(waCtx, sc, stor, cfg.WhatsAppResolveEnabled, cfg.DebugMode)
 		if cfg.WhatsAppResolveEnabled {
 			log.Println("✓ WhatsApp event handler started (resolve-by-reply ENABLED)")
 		} else {
@@ -134,7 +134,7 @@ func main() {
 	var loginErr error
 	for attempt := 1; attempt <= cfg.MaxLoginRetries; attempt++ {
 		log.Printf("   Login attempt %d/%d...", attempt, cfg.MaxLoginRetries)
-		loginErr = auth.Login(ctxHolder.Get(), cfg.LoginURL, cfg.Username, cfg.Password)
+		loginErr = auth.Login(sc, cfg.LoginURL, cfg.Username, cfg.Password)
 		if loginErr == nil {
 			log.Println("✓ Login successful")
 			break
@@ -151,22 +151,17 @@ func main() {
 		log.Fatal("❌ Login failed after", cfg.MaxLoginRetries, "attempts:", loginErr)
 	}
 
-	log.Println("⏳ Waiting for page to load...")
-	time.Sleep(2 * time.Second)
-
 	// Step 9: Initial fetch of complaints
 	log.Println("📬 Fetching complaints...")
-	fetcher := complaint.New(ctxHolder.Get(), stor, tg, wa, cfg, translator)
+	fetcher := complaint.New(sc, stor, tg, wa, cfg, translator)
 	activeComplaintIDs, err := fetcher.FetchAll(cfg.ComplaintURL)
 	if err != nil {
 		log.Fatal("❌ Failed to fetch complaints:", err)
 	}
 
 	// Step 10: Check for resolved complaints
-	// (complaints in storage but not on website anymore)
-	markResolvedComplaints(ctxHolder.Get(), stor, tg, wa, activeComplaintIDs)
+	markResolvedComplaints(stor, tg, wa, activeComplaintIDs)
 
-	// Update health monitor
 	healthMonitor.UpdateFetchStatus("success")
 
 	log.Println("✅ Initial fetch completed!")
@@ -186,7 +181,6 @@ func main() {
 		select {
 		case <-shutdownCtx.Done():
 			log.Println("\n🛑 Shutdown signal received, cleaning up...")
-			ctxHolder.Cancel()
 			log.Println("✅ Cleanup complete, shutting down")
 			return
 
@@ -194,9 +188,8 @@ func main() {
 			log.Println("\n📬 Refreshing complaints list...")
 			log.Println("⏰ Time:", time.Now().Format("2006-01-02 15:04:05"))
 
-			// Attempt to fetch with full retry logic
 			fetchErr := fetchWithRetry(
-				ctxHolder,
+				sc,
 				cfg.ComplaintURL,
 				stor,
 				tg,
@@ -223,35 +216,13 @@ func main() {
 // fetchWithRetry implements the complete error handling flow with retries.
 //
 // Retry strategy:
-//   1. Attempt fetch with timeout
-//   2. If session expired → Re-login and retry
-//   3. If re-login failed → Restart browser, re-login, and retry
-//   4. Repeat up to maxRetries times
-//   5. If all retries failed → Send critical alert
-//
-// Error types handled:
-//   - SessionExpiredError: Triggers re-login
-//   - LoginFailedError: Triggers browser restart
-//   - FetchError: Generic retry with delay
-//   - Context timeout: Treated as fetch error
-//
-// Parameters:
-//   - ctxHolder: Browser context holder (can be updated during restart)
-//   - complaintURL: Dashboard URL to fetch from
-//   - stor: Storage for deduplication
-//   - tg: Telegram client for notifications
-//   - loginURL: Login page URL
-//   - username: DGVCL username
-//   - password: DGVCL password
-//   - cfg: Application configuration
-//   - maxRetries: Maximum retry attempts
-//   - fetchTimeout: Timeout for each fetch attempt
-//   - healthMonitor: Health monitor to update status
-//
-// Returns:
-//   - error: Final error if all retries failed, nil on success
+//  1. Attempt fetch
+//  2. If session expired → Re-login and retry
+//  3. If re-login failed → Reset session (new cookie jar), re-login, and retry
+//  4. Repeat up to maxRetries times
+//  5. If all retries failed → Send critical alert
 func fetchWithRetry(
-	ctxHolder *browser.ContextHolder,
+	sc *session.Client,
 	complaintURL string,
 	stor *storage.Storage,
 	tg *telegram.Client,
@@ -270,64 +241,53 @@ func fetchWithRetry(
 			log.Printf("🔄 Retry attempt %d/%d...", attempt, maxRetries)
 		}
 
-		// Create a child context with timeout for this fetch attempt
-		fetchCtx, fetchCancel := context.WithTimeout(ctxHolder.Get(), fetchTimeout)
-
-		// Attempt to fetch complaints
-		fetcher := complaint.New(fetchCtx, stor, tg, wa, cfg, translator)
+		fetcher := complaint.New(sc, stor, tg, wa, cfg, translator)
 		activeComplaintIDs, err := fetcher.FetchAll(complaintURL)
-		fetchCancel() // Always cancel timeout context
 
 		if err == nil {
-			// Success! Check for resolved complaints and update health
-			markResolvedComplaints(ctxHolder.Get(), stor, tg, wa, activeComplaintIDs)
+			markResolvedComplaints(stor, tg, wa, activeComplaintIDs)
 			healthMonitor.UpdateFetchStatus("success")
 			return nil
 		}
 
 		lastErr = err
 
-		// Analyze error type and determine recovery strategy
 		if sessionErr, ok := err.(*errors.SessionExpiredError); ok {
-			// Session expired → Try re-login
 			log.Println("🔄 Session expired:", sessionErr.Message)
 			log.Println("🔐 Attempting re-login...")
 
-			loginErr := auth.Login(ctxHolder.Get(), loginURL, username, password)
+			loginErr := auth.Login(sc, loginURL, username, password)
 			if loginErr == nil {
 				log.Println("✓ Re-login successful, retrying fetch on next loop...")
 				continue
 			}
 
-			// Re-login failed → Restart browser
+			// Re-login failed → Reset session (equivalent of restarting browser)
 			log.Println("❌ Re-login failed:", loginErr)
-			log.Println("🔄 Restarting browser context...")
+			log.Println("🔄 Resetting session (clearing cookies)...")
 
-			newCtx, newCancel := browser.NewContext()
-			ctxHolder.Set(newCtx, newCancel)
+			if resetErr := sc.Reset(); resetErr != nil {
+				log.Println("⚠️  Session reset failed:", resetErr)
+			}
 
-			log.Println("🔐 Attempting login after browser restart...")
-			loginErr2 := auth.Login(ctxHolder.Get(), loginURL, username, password)
+			log.Println("🔐 Attempting login after session reset...")
+			loginErr2 := auth.Login(sc, loginURL, username, password)
 			if loginErr2 == nil {
-				log.Println("✓ Login successful after browser restart, retrying fetch on next loop...")
+				log.Println("✓ Login successful after session reset, retrying fetch on next loop...")
 				continue
 			}
 
-			log.Println("❌ Login failed even after browser restart:", loginErr2)
+			log.Println("❌ Login failed even after session reset:", loginErr2)
 		} else {
-			// Generic error → Wait and retry
 			log.Println("⚠️  Error fetching complaints:", err)
 			time.Sleep(5 * time.Second)
 		}
 	}
 
-	// All retry attempts failed
 	log.Println("❌ All retry attempts failed.")
 
-	// Update health monitor
 	healthMonitor.UpdateFetchStatus(fmt.Sprintf("error: %v", lastErr))
 
-	// Send critical alert to Telegram
 	if tg != nil {
 		log.Println("🚨 Sending critical failure alert...")
 		alertErr := tg.SendCriticalAlert(
@@ -345,45 +305,26 @@ func fetchWithRetry(
 
 // markResolvedComplaints checks for complaints that were previously seen
 // but are no longer on the website, and marks them as resolved in Telegram.
-//
-// Resolution detection logic:
-//   - Complaint in storage + NOT in active list = Resolved
-//   - Edit Telegram message to show "RESOLVED" status
-//   - Remove from storage to stop tracking
-//
-// This handles automatic resolution detection when complaints are
-// resolved on the website without using the Telegram button.
-//
-// Parameters:
-//   - ctx: Browser context (not used currently, but available for future use)
-//   - stor: Storage with previously seen complaints
-//   - tg: Telegram client for editing messages
-//   - activeIDs: List of currently active complaint IDs from website
-func markResolvedComplaints(ctx context.Context, stor *storage.Storage, tg *telegram.Client, wa *whatsapp.Client, activeIDs []string) {
-	// Create a map of currently active IDs for O(1) lookup
+func markResolvedComplaints(stor *storage.Storage, tg *telegram.Client, wa *whatsapp.Client, activeIDs []string) {
 	activeIDsMap := make(map[string]bool)
 	for _, id := range activeIDs {
 		activeIDsMap[id] = true
 	}
 
-	// Get all previously seen complaints from storage
 	allSeen := stor.GetAllSeenComplaints()
 
 	resolvedCount := 0
 	for _, complaintID := range allSeen {
-		// If complaint is in storage but NOT in active list, it's resolved
 		if !activeIDsMap[complaintID] {
 			messageID := stor.GetMessageID(complaintID)
 			if messageID != "" && tg != nil {
 				log.Printf("✅ Marking complaint %s as resolved", complaintID)
 
-				// Get consumer name from storage
 				consumerName := stor.GetConsumerName(complaintID)
 				if consumerName == "" {
 					consumerName = "Unknown"
 				}
 
-				// Create resolved message
 				resolvedMessage := fmt.Sprintf(
 					"✅ <b>RESOLVED</b>\n\n"+
 						"Complaint #%s\n"+
@@ -394,12 +335,10 @@ func markResolvedComplaints(ctx context.Context, stor *storage.Storage, tg *tele
 					time.Now().Format("02 Jan 2006, 03:04 PM"),
 				)
 
-				// Edit Telegram message
 				err := tg.EditMessageText(tg.ChatID, messageID, resolvedMessage)
 				if err != nil {
 					log.Printf("⚠️  Failed to edit message for complaint %s: %v", complaintID, err)
 				} else {
-					// Remove from storage after successful edit
 					if rmErr := stor.Remove(complaintID); rmErr != nil {
 						log.Printf("⚠️  Failed to remove complaint %s from storage: %v", complaintID, rmErr)
 					} else {
@@ -408,7 +347,6 @@ func markResolvedComplaints(ctx context.Context, stor *storage.Storage, tg *tele
 					}
 				}
 
-				// Also send a plain-text resolved notice on WhatsApp (WA can't edit messages)
 				if wa != nil {
 					waResolvedMsg := fmt.Sprintf(
 						"✅ RESOLVED\n\nComplaint #%s\n👤 %s\n🕐 %s",

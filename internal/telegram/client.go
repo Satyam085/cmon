@@ -30,6 +30,7 @@ import (
 	"time"
 
 	"cmon/internal/api"
+	"cmon/internal/session"
 	"cmon/internal/storage"
 	"cmon/internal/summary"
 )
@@ -608,7 +609,7 @@ func (c *Client) answerCallbackQuery(callbackQueryID string, text string) error 
 //   - ctx: Context for cancellation
 //   - browserCtx: Browser context holder for API calls
 //   - stor: Storage for complaint data
-func (c *Client) HandleUpdates(ctx context.Context, browserCtx interface{}, stor *storage.Storage) {
+func (c *Client) HandleUpdates(ctx context.Context, sc *session.Client, stor *storage.Storage) {
 	if c == nil {
 		log.Println("⚠️  Telegram not configured, callback handler disabled")
 		return
@@ -634,7 +635,7 @@ func (c *Client) HandleUpdates(ctx context.Context, browserCtx interface{}, stor
 				if update.CallbackQuery != nil {
 					c.handleCallbackQuery(ctx, update.CallbackQuery, stor)
 				} else if update.Message != nil {
-					c.handleMessage(ctx, browserCtx, update.Message, stor)
+					c.handleMessage(ctx, sc, update.Message, stor)
 				}
 				offset = update.UpdateID + 1
 			}
@@ -784,14 +785,14 @@ func (c *Client) handleCallbackQuery(ctx context.Context, query *CallbackQuery, 
 //   - browserCtx: Browser context for API calls
 //   - message: Incoming message
 //   - stor: Storage for complaint data
-func (c *Client) handleMessage(ctx context.Context, browserCtx interface{}, message *IncomingMessage, stor *storage.Storage) {
+func (c *Client) handleMessage(ctx context.Context, sc *session.Client, message *IncomingMessage, stor *storage.Storage) {
 	if message.From == nil || message.Text == "" {
 		return
 	}
 
 	// Handle /summary command
 	if strings.TrimSpace(message.Text) == "/summary" {
-		c.handleSummaryCommand(ctx, browserCtx, stor)
+		c.handleSummaryCommand(ctx, sc, stor)
 		return
 	}
 
@@ -864,16 +865,7 @@ func (c *Client) handleMessage(ctx context.Context, browserCtx interface{}, mess
 	// Call API to mark complaint as resolved
 	log.Printf("🌐 Calling DGVCL API to mark complaint %s as resolved...\n", pending.ComplaintNumber)
 
-	// Extract browser context from interface
-	var browserContext context.Context
-	if holder, ok := browserCtx.(interface{ Get() context.Context }); ok {
-		browserContext = holder.Get()
-	} else {
-		log.Printf("⚠️  Invalid browser context type\n")
-		return
-	}
-
-	err := api.ResolveComplaint(browserContext, apiID, message.Text, c.DebugMode)
+	err := api.ResolveComplaint(sc, apiID, message.Text, c.DebugMode)
 	if err != nil {
 		log.Printf("⚠️  Failed to mark complaint on website: %v\n", err)
 		errorMsg := Message{
@@ -948,10 +940,9 @@ func (c *Client) handleMessage(ctx context.Context, browserCtx interface{}, mess
 //  4. Send image to Telegram
 //
 // If no pending complaints exist, sends a text message instead.
-func (c *Client) handleSummaryCommand(ctx context.Context, browserCtx interface{}, stor *storage.Storage) {
+func (c *Client) handleSummaryCommand(ctx context.Context, sc *session.Client, stor *storage.Storage) {
 	log.Println("📊 /summary command received")
 
-	// Send "processing" message
 	processingMsg := Message{
 		ChatID:    c.ChatID,
 		Text:      "📊 <b>Generating summary...</b>\nFetching details for all pending complaints.",
@@ -959,23 +950,8 @@ func (c *Client) handleSummaryCommand(ctx context.Context, browserCtx interface{
 	}
 	c.doRequest("sendMessage", processingMsg)
 
-	// Extract browser context
-	var browserContext context.Context
-	if holder, ok := browserCtx.(interface{ Get() context.Context }); ok {
-		browserContext = holder.Get()
-	} else {
-		log.Println("⚠️  Invalid browser context type for summary")
-		errorMsg := Message{
-			ChatID:    c.ChatID,
-			Text:      "❌ Internal error: browser context unavailable.",
-			ParseMode: "HTML",
-		}
-		c.doRequest("sendMessage", errorMsg)
-		return
-	}
-
 	// Fetch all pending complaint details
-	complaints, err := summary.FetchAllPendingDetails(browserContext, stor)
+	complaints, err := summary.FetchAllPendingDetails(sc, stor)
 	if err != nil {
 		log.Printf("⚠️  Summary fetch failed: %v\n", err)
 		noDataMsg := Message{

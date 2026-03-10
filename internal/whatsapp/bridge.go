@@ -7,10 +7,10 @@
 package whatsapp
 
 import (
-	"context"
 	"fmt"
 
 	"cmon/internal/api"
+	"cmon/internal/session"
 	"cmon/internal/storage"
 	"cmon/internal/summary"
 )
@@ -20,12 +20,12 @@ type summaryComplaint = summary.Complaint
 
 // fetchSummaryComplaints calls summary.FetchAllPendingDetails.
 // storI must be *storage.Storage.
-func fetchSummaryComplaints(ctx context.Context, storI summaryStorage) ([]summaryComplaint, error) {
+func fetchSummaryComplaints(sc *session.Client, storI summaryStorage) ([]summaryComplaint, error) {
 	stor, ok := storI.(*storage.Storage)
 	if !ok {
 		return nil, fmt.Errorf("storage type mismatch in fetchSummaryComplaints")
 	}
-	complaints, err := summary.FetchAllPendingDetails(ctx, stor)
+	complaints, err := summary.FetchAllPendingDetails(sc, stor)
 	if err != nil {
 		return nil, fmt.Errorf("summary fetch: %w", err)
 	}
@@ -38,6 +38,6 @@ func renderTable(complaints []summaryComplaint) ([]byte, error) {
 }
 
 // resolveOnWebsite calls api.ResolveComplaint.
-func resolveOnWebsite(ctx context.Context, apiID, remark string, debugMode bool) error {
-	return api.ResolveComplaint(ctx, apiID, remark, debugMode)
+func resolveOnWebsite(sc *session.Client, apiID, remark string, debugMode bool) error {
+	return api.ResolveComplaint(sc, apiID, remark, debugMode)
 }

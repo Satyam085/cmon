@@ -3,26 +3,22 @@ module cmon
 go 1.25.3
 
 require (
-	github.com/chromedp/cdproto v0.0.0-20250724212937-08a3db8b4327
-	github.com/chromedp/chromedp v0.14.2
+	github.com/PuerkitoBio/goquery v1.11.0
 	github.com/fogleman/gg v1.3.0
 	github.com/joho/godotenv v1.5.1
 	go.mau.fi/whatsmeow v0.0.0-20260227112304-c9652e4448a2
+	golang.org/x/net v0.50.0
 	google.golang.org/protobuf v1.36.11
 	modernc.org/sqlite v1.46.1
 )
 
 require (
 	filippo.io/edwards25519 v1.1.0 // indirect
+	github.com/andybalholm/cascadia v1.3.3 // indirect
 	github.com/beeper/argo-go v1.1.2 // indirect
-	github.com/chromedp/sysutil v1.1.0 // indirect
 	github.com/coder/websocket v1.8.14 // indirect
 	github.com/dustin/go-humanize v1.0.1 // indirect
 	github.com/elliotchance/orderedmap/v3 v3.1.0 // indirect
-	github.com/go-json-experiment/json v0.0.0-20250725192818-e39067aee2d2 // indirect
-	github.com/gobwas/httphead v0.1.0 // indirect
-	github.com/gobwas/pool v0.2.1 // indirect
-	github.com/gobwas/ws v1.4.0 // indirect
 	github.com/golang/freetype v0.0.0-20170609003504-e2365dfdc4a0 // indirect
 	github.com/google/uuid v1.6.0 // indirect
 	github.com/mattn/go-colorable v0.1.14 // indirect
@@ -37,7 +33,6 @@ require (
 	golang.org/x/crypto v0.48.0 // indirect
 	golang.org/x/exp v0.0.0-20260212183809-81e46e3db34a // indirect
 	golang.org/x/image v0.36.0 // indirect
-	golang.org/x/net v0.50.0 // indirect
 	golang.org/x/sys v0.41.0 // indirect
 	golang.org/x/text v0.34.0 // indirect
 	modernc.org/libc v1.67.6 // indirect

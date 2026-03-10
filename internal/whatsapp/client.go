@@ -31,6 +31,8 @@ import (
 
 	_ "modernc.org/sqlite"
 
+	"cmon/internal/session"
+
 	"go.mau.fi/whatsmeow"
 	"go.mau.fi/whatsmeow/proto/waCommon"
 	waProto "go.mau.fi/whatsmeow/proto/waE2E"
@@ -246,7 +248,7 @@ func (c *Client) sendImage(imgBytes []byte, caption string) error {
 //   - browserCtxHolder: Provides browser context for API calls and summary fetch
 //   - stor:           Storage for complaint data
 //   - resolveEnabled: Whether reply-to-resolve is active
-func (c *Client) HandleEvents(ctx context.Context, browserCtxHolder interface{}, stor interface{}, resolveEnabled bool, debugMode bool) {
+func (c *Client) HandleEvents(ctx context.Context, sc *session.Client, stor interface{}, resolveEnabled bool, debugMode bool) {
 	if c == nil {
 		return
 	}
@@ -291,7 +293,7 @@ func (c *Client) HandleEvents(ctx context.Context, browserCtxHolder interface{},
 		// Handle /summary command
 		if lower == "/summary" {
 			log.Println("📊 WhatsApp /summary command received")
-			go c.handleSummaryCommand(ctx, browserCtxHolder, stor)
+			go c.handleSummaryCommand(sc, stor)
 			return
 		}
 
@@ -323,7 +325,7 @@ func (c *Client) HandleEvents(ctx context.Context, browserCtxHolder interface{},
 			}
 
 			log.Printf("📝 WhatsApp resolve request for complaint %s (remark: %s)", complaintNumber, remark)
-			go c.handleResolve(ctx, browserCtxHolder, storRslv, complaintNumber, quotedID, remark, debugMode)
+			go c.handleResolve(sc, storRslv, complaintNumber, quotedID, remark, debugMode)
 		}
 	})
 
@@ -334,17 +336,8 @@ func (c *Client) HandleEvents(ctx context.Context, browserCtxHolder interface{},
 }
 
 // handleSummaryCommand fetches all pending complaints and sends a summary image.
-func (c *Client) handleSummaryCommand(ctx context.Context, browserCtxHolder interface{}, storI interface{}) {
+func (c *Client) handleSummaryCommand(sc *session.Client, storI interface{}) {
 	c.SendMessage("📊 Generating summary... please wait.")
-
-	// Extract browser context
-	holder, ok := browserCtxHolder.(interface{ Get() context.Context })
-	if !ok {
-		log.Println("⚠️  WhatsApp summary: invalid browser context type")
-		c.SendMessage("❌ Internal error: browser context unavailable.")
-		return
-	}
-	browserCtx := holder.Get()
 
 	// Type-assert storage
 	stor, ok := storI.(summaryStorage)
@@ -354,7 +347,7 @@ func (c *Client) handleSummaryCommand(ctx context.Context, browserCtxHolder inte
 	}
 
 	// Fetch pending complaint details
-	complaints, err := fetchPendingSummary(browserCtx, stor)
+	complaints, err := fetchPendingSummary(sc, stor)
 	if err != nil {
 		log.Printf("⚠️  WhatsApp summary fetch failed: %v", err)
 		c.SendMessage("ℹ️ No pending complaints found.")
@@ -381,15 +374,7 @@ func (c *Client) handleSummaryCommand(ctx context.Context, browserCtxHolder inte
 }
 
 // handleResolve resolves a complaint via the DGVCL API and updates tracking.
-func (c *Client) handleResolve(ctx context.Context, browserCtxHolder interface{}, stor resolveStorage, complaintNumber, waMessageID, remark string, debugMode bool) {
-	// Extract browser context
-	holder, ok := browserCtxHolder.(interface{ Get() context.Context })
-	if !ok {
-		c.SendMessage("❌ Internal error: browser context unavailable.")
-		return
-	}
-	browserCtx := holder.Get()
-
+func (c *Client) handleResolve(sc *session.Client, stor resolveStorage, complaintNumber, waMessageID, remark string, debugMode bool) {
 	// Look up API ID
 	apiID := stor.GetAPIID(complaintNumber)
 	if apiID == "" {
@@ -404,7 +389,7 @@ func (c *Client) handleResolve(ctx context.Context, browserCtxHolder interface{}
 	}
 
 	// Call DGVCL API (respects DEBUG_MODE — will simulate without real call if true)
-	if err := resolveComplaintAPI(browserCtx, apiID, remark, debugMode); err != nil {
+	if err := resolveComplaintAPI(sc, apiID, remark, debugMode); err != nil {
 		log.Printf("⚠️  WhatsApp resolve API call failed for %s: %v", complaintNumber, err)
 		c.SendMessage(fmt.Sprintf("❌ Failed to resolve complaint %s on website:\n%v\n\nPlease resolve manually.", complaintNumber, err))
 		return
@@ -475,21 +460,21 @@ type storageSetter interface {
 // These are set via init-style function variables so tests can swap them out.
 
 var (
-	fetchPendingSummary  = defaultFetchPendingSummary
-	renderSummaryImage   = defaultRenderSummaryImage
-	resolveComplaintAPI  = defaultResolveComplaintAPI
+	fetchPendingSummary = defaultFetchPendingSummary
+	renderSummaryImage  = defaultRenderSummaryImage
+	resolveComplaintAPI = defaultResolveComplaintAPI
 )
 
-func defaultFetchPendingSummary(ctx context.Context, stor summaryStorage) ([]summaryComplaint, error) {
-	return fetchSummaryComplaints(ctx, stor)
+func defaultFetchPendingSummary(sc *session.Client, stor summaryStorage) ([]summaryComplaint, error) {
+	return fetchSummaryComplaints(sc, stor)
 }
 
 func defaultRenderSummaryImage(complaints []summaryComplaint) ([]byte, error) {
 	return renderTable(complaints)
 }
 
-func defaultResolveComplaintAPI(ctx context.Context, apiID, remark string, debugMode bool) error {
-	return resolveOnWebsite(ctx, apiID, remark, debugMode)
+func defaultResolveComplaintAPI(sc *session.Client, apiID, remark string, debugMode bool) error {
+	return resolveOnWebsite(sc, apiID, remark, debugMode)
 }
 
 // buildTextSummary produces a plain-text fallback when image sending fails.
