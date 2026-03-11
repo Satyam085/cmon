@@ -79,10 +79,8 @@ type Config struct {
 	// Google Cloud Translation (optional)
 	GeminiAPIKey string // Gemini API key for Gujarati transliteration
 
-	// Performance tuning (NEW)
+	// Performance tuning
 	WorkerPoolSize int           // Number of concurrent workers for complaint processing
-	CacheEnabled   bool          // Enable in-memory caching
-	BatchSize      int           // Number of records to batch before writing to CSV
 	HTTPMaxConns   int           // Maximum HTTP connections in pool
 	HTTPTimeout    time.Duration // HTTP client timeout
 }
@@ -163,12 +161,10 @@ func LoadConfig() (*Config, error) {
 		// Google Cloud Translation (optional)
 		GeminiAPIKey: os.Getenv("GEMINI_API_KEY"),
 
-		// Performance tuning (NEW) - optimized defaults
-		WorkerPoolSize: getEnvInt("WORKER_POOL_SIZE", 10),                   // 10 concurrent workers
-		CacheEnabled:   getEnvOrDefault("CACHE_ENABLED", "true") == "true",  // Cache enabled by default
-		BatchSize:      getEnvInt("BATCH_SIZE", 50),                         // Batch 50 records before CSV write
-		HTTPMaxConns:   getEnvInt("HTTP_MAX_CONNS", 100),                    // 100 connection pool size
-		HTTPTimeout:    getEnvDuration("HTTP_TIMEOUT", 30*time.Second),      // 30s HTTP timeout
+		// Performance tuning - optimized defaults
+		WorkerPoolSize: getEnvInt("WORKER_POOL_SIZE", 10),      // 10 concurrent workers
+		HTTPMaxConns:   getEnvInt("HTTP_MAX_CONNS", 100),       // 100 connection pool size
+		HTTPTimeout:    getEnvDuration("HTTP_TIMEOUT", 30*time.Second), // 30s HTTP timeout
 	}
 
 	// Step 4: Validate required fields
@@ -211,9 +207,6 @@ func (c *Config) Validate() error {
 	}
 	if c.WorkerPoolSize < 1 {
 		return fmt.Errorf("WORKER_POOL_SIZE must be at least 1, got %d", c.WorkerPoolSize)
-	}
-	if c.BatchSize < 1 {
-		return fmt.Errorf("BATCH_SIZE must be at least 1, got %d", c.BatchSize)
 	}
 
 	return nil

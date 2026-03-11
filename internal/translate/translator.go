@@ -99,6 +99,13 @@ func (t *Translator) BatchTranslateToGujarati(ctx context.Context, texts []strin
 		return texts, nil
 	}
 
+	// Guard: we always need exactly 3 fields (Name, Details, Address).
+	// Return originals untouched rather than panic on index out of range.
+	if len(texts) < 3 {
+		log.Printf("  ⚠️  BatchTranslateToGujarati: expected 3 texts, got %d — skipping translation", len(texts))
+		return texts, nil
+	}
+
 	// Build prompt with labeled fields for structured output
 	prompt := fmt.Sprintf("Name: %s\nDetails: %s\nAddress: %s",
 		texts[0], texts[1], texts[2])

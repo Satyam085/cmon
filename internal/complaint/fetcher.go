@@ -147,7 +147,7 @@ func (f *Fetcher) processComplaintsConcurrently(complaints []Link) {
 		apiIDMap[c.ComplaintNumber] = c.APIID
 	}
 
-	pool := NewWorkerPool(f.sc, f.cfg.WorkerPoolSize)
+	pool := NewWorkerPool(f.sc, f.cfg.WorkerPoolSize, len(complaints))
 
 	go func() {
 		for _, complaint := range complaints {

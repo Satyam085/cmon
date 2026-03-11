@@ -65,11 +65,14 @@ type PendingResolution struct {
 //   - ChatID: Target chat ID for notifications
 //   - DebugMode: If true, skip actual API calls (for testing)
 type Client struct {
-	BotToken   string
-	ChatID     string
-	mu         sync.Mutex
-	DebugMode  bool
+	BotToken    string
+	ChatID      string
+	mu          sync.Mutex
+	DebugMode   bool
 	lastReqTime time.Time
+	// httpClient is a persistent client reused across all API calls for
+	// connection pooling — creating a new client per call defeats TCP reuse.
+	httpClient  *http.Client
 }
 
 // Message types for Telegram API
@@ -183,6 +186,10 @@ func NewClient() *Client {
 		BotToken:  botToken,
 		ChatID:    chatID,
 		DebugMode: debugMode,
+		// 60s timeout: short polling is 30s + network overhead
+		httpClient: &http.Client{
+			Timeout: 60 * time.Second,
+		},
 	}
 }
 
@@ -218,13 +225,8 @@ func (c *Client) doRequest(method string, payload interface{}) (map[string]inter
 
 	apiURL := fmt.Sprintf("https://api.telegram.org/bot%s/%s", c.BotToken, method)
 
-	// Use custom HTTP client with longer timeout for long polling
-	// Standard timeout is 30s, but long polling needs 60s (30s poll + 30s overhead)
-	telegramClient := &http.Client{
-		Timeout: 60 * time.Second,
-	}
-
-	resp, err := telegramClient.Post(apiURL, "application/json", bytes.NewBuffer(jsonData))
+	// Use the persistent httpClient (shared connection pool, not re-created per call)
+	resp, err := c.httpClient.Post(apiURL, "application/json", bytes.NewBuffer(jsonData))
 	if err != nil {
 		return nil, fmt.Errorf("failed to send request: %w", err)
 	}

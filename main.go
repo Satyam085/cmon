@@ -33,7 +33,6 @@ import (
 	"time"
 	_ "time/tzdata"
 
-	"cmon/internal/api"
 	"cmon/internal/auth"
 	"cmon/internal/complaint"
 	"cmon/internal/config"
@@ -61,11 +60,14 @@ func main() {
 		log.Fatal("❌ Configuration error:", err)
 	}
 
-	// Initialize shared API HTTP client
-	api.InitHTTPClient(cfg)
 
 	// Initialize storage
 	stor := storage.New()
+	defer func() {
+		if err := stor.Close(); err != nil {
+			log.Printf("⚠️  Failed to close database: %v", err)
+		}
+	}()
 
 	// Step 3: Initialize Telegram client (optional)
 	tg := telegram.NewClient()
@@ -133,14 +135,24 @@ func main() {
 	}
 
 	log.Println("📬 Fetching complaints...")
-	fetcher := complaint.New(sc, stor, tg, wa, cfg, translator)
-	activeComplaintIDs, err := fetcher.FetchAll(cfg.ComplaintURL)
-	if err != nil {
-		log.Fatal("❌ Failed to fetch complaints:", err)
+	fetchErr := fetchWithRetry(
+		sc,
+		cfg.ComplaintURL,
+		stor,
+		tg,
+		wa,
+		cfg.LoginURL,
+		cfg.Username,
+		cfg.Password,
+		cfg,
+		cfg.MaxFetchRetries,
+		cfg.FetchTimeout,
+		healthMonitor,
+		translator,
+	)
+	if fetchErr != nil {
+		log.Fatal("❌ Failed initial fetch after all retries:", fetchErr)
 	}
-
-	// Step 10: Check for resolved complaints
-	markResolvedComplaints(stor, tg, wa, activeComplaintIDs)
 
 	healthMonitor.UpdateFetchStatus("success")
 

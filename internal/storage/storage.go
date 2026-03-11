@@ -361,7 +361,9 @@ func (s *Storage) GetAllSeenComplaints() []string {
 	return complaints
 }
 
-// SaveMultiple atomically inserts records into SQLite and updates memory.
+// SaveMultiple atomically inserts NEW records into SQLite and updates memory.
+// Existing records are left untouched in the DB (INSERT OR IGNORE) to preserve
+// wa_message_id and other previously saved values.
 func (s *Storage) SaveMultiple(records []Record) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -372,7 +374,7 @@ func (s *Storage) SaveMultiple(records []Record) error {
 	}
 
 	stmt, err := tx.Prepare(`
-		INSERT OR REPLACE INTO complaints (complaint_id, tg_message_id, wa_message_id, api_id, consumer_name) 
+		INSERT OR IGNORE INTO complaints (complaint_id, tg_message_id, wa_message_id, api_id, consumer_name) 
 		VALUES (?, ?, ?, ?, ?)
 	`)
 	if err != nil {
@@ -392,16 +394,24 @@ func (s *Storage) SaveMultiple(records []Record) error {
 		return err
 	}
 
-	// Update memory
+	// Update memory maps (safe to overwrite — same data for new records;
+	// for duplicates we still want the latest in-memory state).
 	for _, r := range records {
 		s.seen[r.ComplaintID] = true
-		s.messageIDs[r.ComplaintID] = r.MessageID
+		// Only set tg_message_id in memory if we have one (don't blank existing)
+		if r.MessageID != "" {
+			s.messageIDs[r.ComplaintID] = r.MessageID
+		}
 		if r.WAMessageID != "" {
 			s.waMessageIDs[r.ComplaintID] = r.WAMessageID
 			s.waMessageToComplaint[r.WAMessageID] = r.ComplaintID
 		}
-		s.apiIDs[r.ComplaintID] = r.APIID
-		s.consumerNames[r.ComplaintID] = r.ConsumerName
+		if r.APIID != "" {
+			s.apiIDs[r.ComplaintID] = r.APIID
+		}
+		if r.ConsumerName != "" {
+			s.consumerNames[r.ComplaintID] = r.ConsumerName
+		}
 	}
 
 	return nil

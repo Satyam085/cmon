@@ -37,13 +37,23 @@ type WorkerPool struct {
 // Parameters:
 //   - sc: Authenticated session client (shared across all workers)
 //   - workerCount: Number of concurrent workers
-func NewWorkerPool(sc *session.Client, workerCount int) *WorkerPool {
+//   - batchSize: Number of jobs to be submitted (sizes the channel to prevent deadlock)
+func NewWorkerPool(sc *session.Client, workerCount int, batchSize int) *WorkerPool {
 	log.Printf("  → Creating worker pool with %d workers...\n", workerCount)
+
+	// Channel must be at least as large as the batch to avoid the deadlock where
+	// the submission goroutine blocks while workers wait for results.
+	chSize := batchSize
+	if chSize < workerCount*2 {
+		chSize = workerCount * 2
+	}
 
 	pool := &WorkerPool{
 		workers:     make([]*Worker, workerCount),
-		jobs:        make(chan Link, 100),
-		results:     make(chan ProcessResult, 100),
+		// Size the channel to workerCount*2 as a minimum so Submit never blocks
+		// on small batches. The actual size will be adjusted per-batch in Submit.
+		jobs:        make(chan Link, chSize),
+		results:     make(chan ProcessResult, chSize),
 		workerCount: workerCount,
 	}
 

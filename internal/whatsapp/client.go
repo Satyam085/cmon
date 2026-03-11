@@ -255,6 +255,17 @@ func (c *Client) HandleEvents(ctx context.Context, sc *session.Client, stor inte
 	log.Println("✓ Starting WhatsApp event handler...")
 
 	handlerID := c.wm.AddEventHandler(func(evt interface{}) {
+		// Auto-reconnect on disconnection (network blip, server reset, etc.)
+		if _, ok := evt.(*events.Disconnected); ok {
+			log.Println("⚠️  WhatsApp disconnected — attempting reconnect...")
+			if err := c.wm.Connect(); err != nil {
+				log.Printf("⚠️  WhatsApp reconnect failed: %v (will retry on next event)", err)
+			} else {
+				log.Println("✓ WhatsApp reconnected successfully")
+			}
+			return
+		}
+
 		msg, ok := evt.(*events.Message)
 		if !ok {
 			return
@@ -391,6 +402,12 @@ func (c *Client) handleResolve(sc *session.Client, stor resolveStorage, complain
 		log.Printf("⚠️  WhatsApp resolve API call failed for %s: %v", complaintNumber, err)
 		c.SendMessage(fmt.Sprintf("❌ Failed to resolve complaint %s on website:\n%v\n\nPlease resolve manually.", complaintNumber, err))
 		return
+	}
+
+	// Remove from storage so the automatic markResolvedComplaints loop doesn't
+	// attempt to double-resolve or edit a stale Telegram message.
+	if err := stor.Remove(complaintNumber); err != nil {
+		log.Printf("⚠️  Resolved on website but failed to remove %s from storage: %v", complaintNumber, err)
 	}
 
 	c.SendMessage(fmt.Sprintf("✅ RESOLVED\n\nComplaint #%s\n💬 %s", complaintNumber, remark))

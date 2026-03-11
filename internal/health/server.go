@@ -95,8 +95,15 @@ func (m *Monitor) GetStatus() Status {
 
 	uptime := time.Since(m.startTime)
 
+	// Derive real health: "not started" is fine (startup phase),
+	// "success" is healthy, anything else means the last fetch failed.
+	overallStatus := "healthy"
+	if m.lastFetchStatus != "success" && m.lastFetchStatus != "not started" {
+		overallStatus = "unhealthy"
+	}
+
 	return Status{
-		Status:          "healthy",
+		Status:          overallStatus,
 		Uptime:          uptime.String(),
 		LastFetchTime:   m.lastFetchTime.Format("2006-01-02 15:04:05"),
 		LastFetchStatus: m.lastFetchStatus,
@@ -122,17 +129,26 @@ func (m *Monitor) GetStatus() Status {
 //   - monitor: Health monitor to query for status
 //   - port: Port to listen on (e.g., "8080")
 func StartServer(monitor *Monitor, port string) {
-	http.HandleFunc("/health", func(w http.ResponseWriter, r *http.Request) {
+	mux := http.NewServeMux()
+	mux.HandleFunc("/health", func(w http.ResponseWriter, r *http.Request) {
 		status := monitor.GetStatus()
 
 		w.Header().Set("Content-Type", "application/json")
-		w.WriteHeader(http.StatusOK)
+		// Return 503 when unhealthy so uptime monitors detect failures automatically.
+		if status.Status != "healthy" {
+			w.WriteHeader(http.StatusServiceUnavailable)
+		} else {
+			w.WriteHeader(http.StatusOK)
+		}
 		json.NewEncoder(w).Encode(status)
 	})
 
 	go func() {
-		log.Printf("✓ Health check server started on :%s", port)
-		if err := http.ListenAndServe(":"+port, nil); err != nil {
+		// Bind only to loopback — the health endpoint has no authentication.
+		// Expose it externally only via a reverse proxy with auth if needed.
+		addr := "127.0.0.1:" + port
+		log.Printf("✓ Health check server started on %s", addr)
+		if err := http.ListenAndServe(addr, mux); err != nil {
 			log.Printf("⚠️  Health check server error: %v", err)
 		}
 	}()

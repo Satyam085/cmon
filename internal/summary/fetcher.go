@@ -64,12 +64,15 @@ func FetchAllPendingDetails(sc *session.Client, stor *storage.Storage) ([]Compla
 }
 
 // fetchAllConcurrent fetches all complaints concurrently using goroutines.
-// This replaces the old browser-based Promise.allSettled() approach.
+// A semaphore limits concurrency to 10 to avoid overwhelming the server.
 func fetchAllConcurrent(sc *session.Client, requests []complaintRequest) []Complaint {
 	type result struct {
 		complaint *Complaint
 		err       error
 	}
+
+	const maxConcurrent = 10
+	sem := make(chan struct{}, maxConcurrent)
 
 	results := make([]result, len(requests))
 	var wg sync.WaitGroup
@@ -78,6 +81,8 @@ func fetchAllConcurrent(sc *session.Client, requests []complaintRequest) []Compl
 		wg.Add(1)
 		go func(idx int, req complaintRequest) {
 			defer wg.Done()
+			sem <- struct{}{}        // acquire slot
+			defer func() { <-sem }() // release slot
 			c, err := fetchComplaintDetail(sc, req.apiID, req.complaintNo)
 			results[idx] = result{complaint: c, err: err}
 		}(i, r)

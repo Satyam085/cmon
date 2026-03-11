@@ -25,6 +25,7 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"cmon/internal/errors"
@@ -40,8 +41,9 @@ import (
 // be sent as `Authorization: Bearer <token>` on every subsequent request.
 type Client struct {
 	http        *http.Client
-	baseURL     string // root host, used for session expiry checks
-	bearerToken string // Sanctum Bearer token set after successful login
+	mu          sync.RWMutex // protects bearerToken and baseURL
+	baseURL     string       // root host, used for session expiry checks
+	bearerToken string       // Sanctum Bearer token set after successful login
 }
 
 // New creates a new session client with a fresh, empty cookie jar.
@@ -83,7 +85,10 @@ func New() (*Client, error) {
 
 // Reset clears the bearer token and cookie jar, forcing a full re-login.
 func (c *Client) Reset() error {
+	c.mu.Lock()
 	c.bearerToken = ""
+	c.mu.Unlock()
+
 	jar, err := cookiejar.New(&cookiejar.Options{
 		PublicSuffixList: publicsuffix.List,
 	})
@@ -108,7 +113,9 @@ func (c *Client) Reset() error {
 func (c *Client) Login(loginURL, username, password string) error {
 	// Remember base host for all subsequent requests
 	if parsed, err := url.Parse(loginURL); err == nil {
+		c.mu.Lock()
 		c.baseURL = fmt.Sprintf("%s://%s", parsed.Scheme, parsed.Host)
+		c.mu.Unlock()
 	}
 
 	// Step 1: GET the login page
@@ -138,7 +145,9 @@ func (c *Client) Login(loginURL, username, password string) error {
 
 	// Step 4: POST JSON to /api/login
 	// The browser JavaScript intercepts the form submit and sends JSON here.
+	c.mu.RLock()
 	apiLoginURL := c.baseURL + "/api/login"
+	c.mu.RUnlock()
 
 	payload := map[string]interface{}{
 		"email_or_username": username,
@@ -183,7 +192,9 @@ func (c *Client) Login(loginURL, username, password string) error {
 	if err := json.Unmarshal(respBody, &loginResp); err != nil || loginResp.Token == "" {
 		return errors.NewLoginFailedError("login API response missing token", err)
 	}
+	c.mu.Lock()
 	c.bearerToken = loginResp.Token
+	c.mu.Unlock()
 	return nil
 }
 
@@ -222,8 +233,11 @@ func (c *Client) GetJSON(rawURL string) ([]byte, error) {
 	}
 	req.Header.Set("X-Requested-With", "XMLHttpRequest")
 	req.Header.Set("Accept", "application/json, text/javascript, */*")
-	if c.bearerToken != "" {
-		req.Header.Set("Authorization", "Bearer "+c.bearerToken)
+	c.mu.RLock()
+	token := c.bearerToken
+	c.mu.RUnlock()
+	if token != "" {
+		req.Header.Set("Authorization", "Bearer "+token)
 	}
 
 	resp, err := c.http.Do(req)
@@ -251,8 +265,11 @@ func (c *Client) PostForm(rawURL string, data url.Values) ([]byte, error) {
 	}
 	req.Header.Set("Content-Type", "application/x-www-form-urlencoded; charset=UTF-8")
 	req.Header.Set("X-Requested-With", "XMLHttpRequest")
-	if c.bearerToken != "" {
-		req.Header.Set("Authorization", "Bearer "+c.bearerToken)
+	c.mu.RLock()
+	token := c.bearerToken
+	c.mu.RUnlock()
+	if token != "" {
+		req.Header.Set("Authorization", "Bearer "+token)
 	}
 
 	resp, err := c.http.Do(req)
@@ -280,8 +297,11 @@ func (c *Client) get(rawURL string) (*http.Response, error) {
 		return nil, fmt.Errorf("failed to create request: %w", err)
 	}
 	req.Header.Set("Accept", "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8")
-	if c.bearerToken != "" {
-		req.Header.Set("Authorization", "Bearer "+c.bearerToken)
+	c.mu.RLock()
+	token := c.bearerToken
+	c.mu.RUnlock()
+	if token != "" {
+		req.Header.Set("Authorization", "Bearer "+token)
 	}
 
 	resp, err := c.http.Do(req)
@@ -297,25 +317,52 @@ func (c *Client) get(rawURL string) (*http.Response, error) {
 
 // solveCaptcha solves the arithmetic captcha used on the DGVCL portal login page.
 //
-// Input format:  "5 + 3"
-// Output format: "8"
+// Supports: +  (addition), -  (subtraction), × / x / * (multiplication)
+// Input examples:  "5 + 3"  "12 - 4"  "3 × 7"
 func solveCaptcha(text string) (string, error) {
-	// Normalise whitespace and extract numbers with a simple regex
-	re := regexp.MustCompile(`(\d+)\s*\+\s*(\d+)`)
-	matches := re.FindStringSubmatch(strings.TrimSpace(text))
-	if len(matches) < 3 {
-		// Fallback: split by whitespace
+	text = strings.TrimSpace(text)
+
+	// Match: <number> <operator> <number>
+	re := regexp.MustCompile(`(\d+)\s*([\+\-\×xX\*])\s*(\d+)`)
+	matches := re.FindStringSubmatch(text)
+
+	var a, b int
+	var op string
+
+	if len(matches) == 4 {
+		var err1, err2 error
+		a, err1 = strconv.Atoi(matches[1])
+		b, err2 = strconv.Atoi(matches[3])
+		op = matches[2]
+		if err1 != nil || err2 != nil {
+			return "", fmt.Errorf("captcha parse failed (numbers) for %q: %v %v", text, err1, err2)
+		}
+	} else {
+		// Fallback: whitespace-split
 		parts := strings.Fields(text)
 		if len(parts) < 3 {
+			log.Printf("  ⚠️  Captcha raw text (parse failed): %q", text)
 			return "", fmt.Errorf("invalid captcha format: %q", text)
 		}
-		matches = []string{"", parts[0], parts[2]}
+		var err1, err2 error
+		a, err1 = strconv.Atoi(parts[0])
+		b, err2 = strconv.Atoi(parts[2])
+		op = parts[1]
+		if err1 != nil || err2 != nil {
+			log.Printf("  ⚠️  Captcha raw text (number parse failed): %q", text)
+			return "", fmt.Errorf("invalid captcha numbers in %q", text)
+		}
 	}
 
-	a, err1 := strconv.Atoi(matches[1])
-	b, err2 := strconv.Atoi(matches[2])
-	if err1 != nil || err2 != nil {
-		return "", fmt.Errorf("failed to parse captcha numbers from %q", text)
+	switch op {
+	case "+":
+		return strconv.Itoa(a + b), nil
+	case "-":
+		return strconv.Itoa(a - b), nil
+	case "×", "x", "X", "*":
+		return strconv.Itoa(a * b), nil
+	default:
+		log.Printf("  ⚠️  Unknown captcha operator %q in %q", op, text)
+		return "", fmt.Errorf("unknown captcha operator %q in %q", op, text)
 	}
-	return strconv.Itoa(a + b), nil
 }
