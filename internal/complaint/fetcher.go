@@ -60,12 +60,9 @@ func New(sc *session.Client, storage *storage.Storage, tg *telegram.Client, wa *
 func (f *Fetcher) FetchAll(baseURL string) ([]string, error) {
 	var allActiveComplaintIDs []string
 
-	log.Println("  → Navigating to complaints dashboard...")
-
 	// Fetch first page
 	doc, err := f.sc.GetDoc(baseURL)
 	if err != nil {
-		log.Printf("  ✗ Failed to fetch dashboard: %v", err)
 		return nil, errors.NewFetchError("failed to navigate to dashboard", err)
 	}
 
@@ -79,16 +76,12 @@ func (f *Fetcher) FetchAll(baseURL string) ([]string, error) {
 		return nil, errors.NewFetchError("dashboard loaded but #dataTable not found", nil)
 	}
 
-	log.Println("  ✓ Dashboard loaded")
-
 	currentPage := 1
 	for {
 		if currentPage > f.cfg.MaxPages {
 			log.Printf("🛑 Reached maximum page limit (%d). Stopping.", f.cfg.MaxPages)
 			break
 		}
-
-		log.Printf("📄 Processing Page %d...", currentPage)
 
 		pageIDs, err := f.scrapePage(doc)
 		if err != nil {
@@ -100,14 +93,11 @@ func (f *Fetcher) FetchAll(baseURL string) ([]string, error) {
 		// Find next page URL from current document
 		nextURL := getNextPageURL(doc)
 		if nextURL == "" {
-			log.Println("✅ Reached last page (No valid 'Next' link found)")
 			break
 		}
 
-		log.Printf("  → Navigating to next page...")
 		doc, err = f.sc.GetDoc(nextURL)
 		if err != nil {
-			log.Printf("  ⚠️  Failed to fetch next page: %v", err)
 			break
 		}
 
@@ -119,14 +109,12 @@ func (f *Fetcher) FetchAll(baseURL string) ([]string, error) {
 		currentPage++
 	}
 
-	log.Printf("🎉 Total active complaints found across %d pages: %d", currentPage, len(allActiveComplaintIDs))
 	return allActiveComplaintIDs, nil
 }
 
 // scrapePage extracts links from the current page and processes new complaints.
 func (f *Fetcher) scrapePage(doc *goquery.Document) ([]string, error) {
 	complaintLinks := extractLinks(doc)
-	log.Println("    → Found", len(complaintLinks), "complaints on this page")
 
 	var allIDsOnPage []string
 	var newComplaints []Link
@@ -142,7 +130,6 @@ func (f *Fetcher) scrapePage(doc *goquery.Document) ([]string, error) {
 
 		if f.storage.IsNew(complaint.ComplaintNumber) {
 			newComplaints = append(newComplaints, complaint)
-			log.Println("    🆕 New Complaint -", complaint.ComplaintNumber)
 		}
 	}
 
@@ -172,7 +159,6 @@ func (f *Fetcher) processComplaintsConcurrently(complaints []Link) {
 	var results []ProcessResult
 	for result := range pool.Results() {
 		if result.Error != nil {
-			log.Printf("    ⚠️  Failed to fetch details for %s: %v", result.ComplaintID, result.Error)
 			continue
 		}
 		results = append(results, result)
@@ -207,7 +193,6 @@ func (f *Fetcher) processComplaintsConcurrently(complaints []Link) {
 			texts := []string{name, desc, addr}
 			out, err := f.translator.BatchTranslateToGujarati(context.Background(), texts)
 			if err != nil {
-				log.Printf("    ⚠️  Translation failed for %s: %v", res.ComplaintID, err)
 				translations[i] = translationResult{name, desc, addr}
 			} else {
 				translations[i] = translationResult{out[0], out[1], out[2]}
@@ -254,8 +239,6 @@ func (f *Fetcher) processComplaintsConcurrently(complaints []Link) {
 	if len(recordsToSave) > 0 {
 		if err := f.storage.SaveMultiple(recordsToSave); err != nil {
 			log.Println("    ⚠️  Failed to save records:", err)
-		} else {
-			log.Printf("    ✓ Saved %d new complaints", len(recordsToSave))
 		}
 	}
 

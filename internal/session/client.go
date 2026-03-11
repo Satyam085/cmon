@@ -106,8 +106,6 @@ func (c *Client) Reset() error {
 //  3. POST JSON credentials to /api/login with X-CSRF-Token header
 //  4. Verify session by checking dashboard is accessible (no login form)
 func (c *Client) Login(loginURL, username, password string) error {
-	log.Println("  → Fetching login page...")
-
 	// Remember base host for all subsequent requests
 	if parsed, err := url.Parse(loginURL); err == nil {
 		c.baseURL = fmt.Sprintf("%s://%s", parsed.Scheme, parsed.Host)
@@ -118,17 +116,13 @@ func (c *Client) Login(loginURL, username, password string) error {
 	if err != nil {
 		return errors.NewLoginFailedError("failed to load login page", err)
 	}
-	log.Println("  ✓ Login page loaded")
-
 	// Step 2: Extract CSRF token — Laravel embeds it in <meta name="csrf-token">
 	csrfToken := loginDoc.Find(`meta[name="csrf-token"]`).AttrOr("content", "")
 	if csrfToken == "" {
 		// Fallback: some pages put it in a hidden input named _token
 		csrfToken = loginDoc.Find(`input[name="_token"]`).AttrOr("value", "")
 	}
-	if csrfToken != "" {
-		log.Printf("  ✓ CSRF token found (%d chars)", len(csrfToken))
-	} else {
+	if csrfToken == "" {
 		log.Println("  ⚠️  No CSRF token found — proceeding without it")
 	}
 
@@ -141,7 +135,6 @@ func (c *Client) Login(loginURL, username, password string) error {
 	if err != nil {
 		return errors.NewLoginFailedError("captcha solution failed", err)
 	}
-	log.Printf("  ✓ Captcha solved: %s = %s", captchaText, captchaAnswer)
 
 	// Step 4: POST JSON to /api/login
 	// The browser JavaScript intercepts the form submit and sends JSON here.
@@ -158,7 +151,6 @@ func (c *Client) Login(loginURL, username, password string) error {
 		return errors.NewLoginFailedError("failed to marshal login payload", err)
 	}
 
-	log.Println("  → Submitting JSON credentials to /api/login...")
 	req, err := http.NewRequest(http.MethodPost, apiLoginURL, bytes.NewReader(payloadBytes))
 	if err != nil {
 		return errors.NewLoginFailedError("failed to create login request", err)
@@ -179,7 +171,6 @@ func (c *Client) Login(loginURL, username, password string) error {
 	defer resp.Body.Close()
 
 	respBody, _ := io.ReadAll(resp.Body)
-	log.Printf("  → /api/login response: HTTP %d — %s", resp.StatusCode, string(respBody))
 
 	if resp.StatusCode != http.StatusOK {
 		return errors.NewLoginFailedError(fmt.Sprintf("login API returned HTTP %d: %s", resp.StatusCode, string(respBody)), nil)
@@ -193,9 +184,6 @@ func (c *Client) Login(loginURL, username, password string) error {
 		return errors.NewLoginFailedError("login API response missing token", err)
 	}
 	c.bearerToken = loginResp.Token
-	log.Printf("  ✓ Bearer token received (%d chars)", len(c.bearerToken))
-
-	log.Println("  ✓ Login successful")
 	return nil
 }
 

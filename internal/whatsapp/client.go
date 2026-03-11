@@ -185,7 +185,6 @@ func (c *Client) SendComplaintMessage(text, complaintNumber string, storI interf
 		log.Printf("⚠️  WhatsApp storage type mismatch, cannot track message ID")
 	}
 
-	log.Printf("   ✓ WhatsApp complaint message sent (msgID: %s → %s)", resp.ID, complaintNumber)
 	return nil
 }
 
@@ -370,7 +369,6 @@ func (c *Client) handleSummaryCommand(sc *session.Client, storI interface{}) {
 		return
 	}
 
-	log.Println("✓ WhatsApp summary image sent")
 }
 
 // handleResolve resolves a complaint via the DGVCL API and updates tracking.

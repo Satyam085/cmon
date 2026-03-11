@@ -54,37 +54,29 @@ func main() {
 	}
 	time.Local = ist
 
-	log.Println("🚀 Starting CMON application...")
+	log.Println("🚀 Starting CMON...")
 
-	// Step 1: Load configuration from environment variables
 	cfg, err := config.LoadConfig()
 	if err != nil {
 		log.Fatal("❌ Configuration error:", err)
 	}
-	log.Printf("✓ Loaded credentials for user: %s", cfg.Username)
-	log.Printf("✓ Pagination limit: %d pages", cfg.MaxPages)
-	log.Printf("✓ Worker pool size: %d workers", cfg.WorkerPoolSize)
 
-	// Step 1.5: Initialize shared API HTTP client
+	// Initialize shared API HTTP client
 	api.InitHTTPClient(cfg)
 
-	// Step 2: Initialize storage
-	log.Println("📋 Initializing complaint storage...")
+	// Initialize storage
 	stor := storage.New()
 
 	// Step 3: Initialize Telegram client (optional)
-	log.Println("📱 Initializing Telegram...")
 	tg := telegram.NewClient()
 
 	// Step 3a: Initialize WhatsApp client (optional)
-	log.Println("💬 Initializing WhatsApp...")
 	wa := whatsapp.NewClient()
 	if wa != nil {
 		defer wa.Disconnect()
 	}
 
 	// Step 3b: Initialize Gemini Translator (optional)
-	log.Println("🌐 Initializing Gujarati translator...")
 	translator, err := translate.NewTranslator(context.Background(), cfg.GeminiAPIKey, cfg)
 	if err != nil {
 		log.Printf("⚠️  Translator init failed (translation disabled): %v", err)
@@ -100,7 +92,6 @@ func main() {
 	health.StartServer(healthMonitor, cfg.HealthCheckPort)
 
 	// Step 6: Create authenticated session client (replaces browser context)
-	log.Println("🌐 Initializing HTTP session client...")
 	sc, err := session.New()
 	if err != nil {
 		log.Fatal("❌ Failed to create session client:", err)
@@ -111,32 +102,22 @@ func main() {
 	if tg != nil {
 		callbackCtx, callbackCancel := context.WithCancel(context.Background())
 		defer callbackCancel()
-
 		go tg.HandleUpdates(callbackCtx, sc, stor)
-		log.Println("✓ Telegram callback handler started")
 	}
 
 	// Step 7a: Start WhatsApp event handler if configured
 	if wa != nil {
 		waCtx, waCancel := context.WithCancel(context.Background())
 		defer waCancel()
-
 		go wa.HandleEvents(waCtx, sc, stor, cfg.WhatsAppResolveEnabled, cfg.DebugMode)
-		if cfg.WhatsAppResolveEnabled {
-			log.Println("✓ WhatsApp event handler started (resolve-by-reply ENABLED)")
-		} else {
-			log.Println("✓ WhatsApp event handler started (/summary only; resolve-by-reply disabled)")
-		}
 	}
 
-	// Step 8: Login with retry logic
-	log.Println("🔐 Attempting to login...")
+	log.Println("🔐 Logging in...")
 	var loginErr error
 	for attempt := 1; attempt <= cfg.MaxLoginRetries; attempt++ {
-		log.Printf("   Login attempt %d/%d...", attempt, cfg.MaxLoginRetries)
 		loginErr = auth.Login(sc, cfg.LoginURL, cfg.Username, cfg.Password)
 		if loginErr == nil {
-			log.Println("✓ Login successful")
+			log.Println("✓ Logged in")
 			break
 		}
 
@@ -148,10 +129,9 @@ func main() {
 	}
 
 	if loginErr != nil {
-		log.Fatal("❌ Login failed after", cfg.MaxLoginRetries, "attempts:", loginErr)
+		log.Fatal("❌ Login failed:", loginErr)
 	}
 
-	// Step 9: Initial fetch of complaints
 	log.Println("📬 Fetching complaints...")
 	fetcher := complaint.New(sc, stor, tg, wa, cfg, translator)
 	activeComplaintIDs, err := fetcher.FetchAll(cfg.ComplaintURL)
@@ -164,8 +144,7 @@ func main() {
 
 	healthMonitor.UpdateFetchStatus("success")
 
-	log.Println("✅ Initial fetch completed!")
-	log.Printf("⏰ Starting refresh loop - will check every %v...\n", cfg.FetchInterval)
+	log.Printf("⏰ Running — next check in %v\n", cfg.FetchInterval)
 	log.Println("═══════════════════════════════════════════════════════════")
 
 	// Step 11: Set up graceful shutdown
@@ -185,8 +164,7 @@ func main() {
 			return
 
 		case <-ticker.C:
-			log.Println("\n📬 Refreshing complaints list...")
-			log.Println("⏰ Time:", time.Now().Format("2006-01-02 15:04:05"))
+			log.Printf("📬 Refreshing — %s", time.Now().Format("15:04:05"))
 
 			fetchErr := fetchWithRetry(
 				sc,
