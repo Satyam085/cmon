@@ -25,10 +25,15 @@ import (
 const systemPrompt = `You are a translator for an Indian electricity complaint system.
 The input contains complaint fields (Name, Details, Address) written in Gujarati using English/Latin script (transliteration).
 Convert each field to proper Gujarati script (ગુજરાતી).
+
 Rules:
 - Transliterate Gujarati words from English script to Gujarati script
 - Keep numbers, dates, and complaint IDs as-is
-- If a field is already in English (like a proper name), transliterate it phonetically
+- DO NOT translate or transliterate common DISCOM abbreviations. Keep them in English script:
+  * AG, LT, HT, TC, JGY, GUVNL, GETCO, GSECL
+  * DGVCL, PGVCL, MGVCL, UGVCL
+  * KV, KVA, HP, SKY
+- If a field is already in English (like a proper name), transliterate it phonetically to Gujarati script
 - Output ONLY the translated fields in the exact same format, nothing else`
 
 // Translator wraps the Gemini API client for transliteration.
@@ -51,7 +56,7 @@ func NewTranslator(_ context.Context, apiKey string, cfg *config.Config) (*Trans
 
 	return &Translator{
 		apiKey: apiKey,
-		model:  "gemini-2.5-flash",
+		model:  "gemini-2.5-flash-lite",
 		client: &http.Client{
 			Timeout: cfg.HTTPTimeout,
 			Transport: &http.Transport{

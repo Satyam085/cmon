@@ -323,7 +323,7 @@ func solveCaptcha(text string) (string, error) {
 	text = strings.TrimSpace(text)
 
 	// Match: <number> <operator> <number>
-	re := regexp.MustCompile(`(\d+)\s*([\+\-\×xX\*])\s*(\d+)`)
+	re := regexp.MustCompile(`(\d+)\s*([\+\-×xX\*])\s*(\d+)`)
 	matches := re.FindStringSubmatch(text)
 
 	var a, b int
