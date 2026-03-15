@@ -34,7 +34,6 @@ var entries = []Entry{
 	{Village: "Kalakva", Belt: "Buhari"},
 	{Village: "Kamalchhod", Belt: "Bajipura"},
 	{Village: "Kanajod", Belt: "Bhimpor"},
-	{Village: "Kanjod", Belt: "Bhimpor"},
 	{Village: "Kasvav", Belt: "Kelkui"},
 	{Village: "Kelkui", Belt: "Kelkui"},
 	{Village: "Khambhla", Belt: "Shiker"},
@@ -163,7 +162,7 @@ func similarityScore(village, segment string) int {
 	if maxLen == 0 {
 		return 0
 	}
-	score := 100 - (dist*100/maxLen)
+	score := 100 - (dist * 100 / maxLen)
 	if score < 0 {
 		return 0
 	}
