@@ -10,6 +10,7 @@ import (
 	"strings"
 	"time"
 
+	"cmon/internal/belt"
 	"cmon/internal/config"
 	"cmon/internal/errors"
 	"cmon/internal/session"
@@ -183,6 +184,15 @@ func (f *Fetcher) processComplaintsConcurrently(complaints []Link) {
 	translations := make([]translationResult, len(results))
 
 	for i, res := range results {
+		match := belt.Resolve(
+			safeStr(res.Details.Area),
+			safeStr(res.Details.ExactLocation),
+			safeStr(res.Details.Description),
+		)
+		res.Details.Village = match.Village
+		res.Details.Belt = match.Belt
+		results[i].Details = res.Details
+
 		name := safeStr(res.Details.ComplainantName)
 		desc := safeStr(res.Details.Description)
 		loc := safeStr(res.Details.ExactLocation)
@@ -231,6 +241,8 @@ func (f *Fetcher) processComplaintsConcurrently(complaints []Link) {
 			MessageID:    messageID,
 			APIID:        apiIDMap[res.ComplaintID],
 			ConsumerName: res.ConsumerName,
+			Village:      res.Details.Village,
+			Belt:         res.Details.Belt,
 		}
 		recordsToSave = append(recordsToSave, record)
 	}
@@ -284,6 +296,7 @@ func buildWhatsAppMessage(details Details, gujaratiText string) string {
 			"👤 %s\n"+
 			"📞 %s\n"+
 			"🆔 Consumer: %s\n"+
+			"🏷️ Belt: %s\n"+
 			"📅 %s\n\n"+
 			"💬 Details:\n%s\n"+
 			"📍 %s, %s",
@@ -291,6 +304,7 @@ func buildWhatsAppMessage(details Details, gujaratiText string) string {
 		str(details.ComplainantName),
 		str(details.MobileNo),
 		str(details.ConsumerNo),
+		displayBelt(details.Belt),
 		str(details.ComplainDate),
 		str(details.Description),
 		str(details.ExactLocation),
@@ -302,6 +316,13 @@ func buildWhatsAppMessage(details Details, gujaratiText string) string {
 	}
 
 	return msg
+}
+
+func displayBelt(belt string) string {
+	if strings.TrimSpace(belt) == "" {
+		return "Unknown"
+	}
+	return belt
 }
 
 // onclickRe matches the API ID from onclick="openModelData(12345)"

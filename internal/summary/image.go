@@ -25,6 +25,8 @@ type Complaint struct {
 	MobileNo     string
 	Address      string
 	Area         string
+	Village      string
+	Belt         string
 	Description  string
 	ComplainDate string
 }
@@ -42,6 +44,7 @@ const (
 	footerPadding = 80
 	minColWidth   = 110
 	maxAddrWidth  = 360.0
+	maxBeltWidth  = 220.0
 	maxDescWidth  = 440.0
 )
 
@@ -73,6 +76,7 @@ var columns = []column{
 	{"Mobile No", func(c *Complaint) string { return c.MobileNo }, 0},
 	{"Address", func(c *Complaint) string { return c.Address }, maxAddrWidth},
 	{"Area", func(c *Complaint) string { return c.Area }, 0},
+	{"Belt", func(c *Complaint) string { return c.Belt }, maxBeltWidth},
 	{"Description", func(c *Complaint) string { return c.Description }, maxDescWidth},
 	{"Date", func(c *Complaint) string { return c.ComplainDate }, 0},
 }
@@ -187,6 +191,9 @@ func RenderTable(complaints []Complaint) ([]byte, error) {
 
 	// Sort by complaint date ascending
 	sort.Slice(complaints, func(i, j int) bool {
+		if complaints[i].Belt != complaints[j].Belt {
+			return complaints[i].Belt < complaints[j].Belt
+		}
 		return complaints[i].ComplainDate < complaints[j].ComplainDate
 	})
 
@@ -311,6 +318,12 @@ func RenderTable(complaints []Complaint) ([]byte, error) {
 		dc.SetColor(textColor)
 		x := tableX
 		for i, col := range columns {
+			if col.header == "Belt" {
+				drawBeltCell(dc, x, curY, colWidths[i], rh, c.Belt)
+				x += colWidths[i]
+				continue
+			}
+
 			text := col.field(&c)
 			innerWidth := colWidths[i] - cellPaddingX*2
 			wrapped := wrapText(dc, text, innerWidth)
@@ -370,4 +383,53 @@ func truncate(s string, maxLen int) string {
 		return string(runes[:maxLen]) + "…"
 	}
 	return s
+}
+
+func drawBeltCell(dc *gg.Context, x, y, width, height float64, belt string) {
+	label := belt
+	if strings.TrimSpace(label) == "" {
+		label = "Unknown"
+	}
+
+	fill, text := beltColors(label)
+	padX := 16.0
+	padY := 12.0
+	pillW := width - cellPaddingX*2
+	if pillW < 40 {
+		pillW = width - padX*2
+	}
+	pillH := height - padY*2
+	if pillH > 40 {
+		pillH = 40
+	}
+	py := y + (height-pillH)/2
+	px := x + cellPaddingX
+
+	dc.SetColor(fill)
+	dc.DrawRoundedRectangle(px, py, pillW, pillH, 14)
+	dc.Fill()
+
+	dc.SetColor(text)
+	dc.DrawStringAnchored(label, px+pillW/2, py+pillH/2+1, 0.5, 0.5)
+}
+
+func beltColors(belt string) (color.Color, color.Color) {
+	switch strings.ToLower(strings.TrimSpace(belt)) {
+	case "buhari":
+		return color.RGBA{R: 220, G: 252, B: 231, A: 255}, color.RGBA{R: 22, G: 101, B: 52, A: 255}
+	case "rupvada":
+		return color.RGBA{R: 219, G: 234, B: 254, A: 255}, color.RGBA{R: 30, G: 64, B: 175, A: 255}
+	case "bhimpor":
+		return color.RGBA{R: 254, G: 240, B: 138, A: 255}, color.RGBA{R: 133, G: 77, B: 14, A: 255}
+	case "shiker":
+		return color.RGBA{R: 233, G: 213, B: 255, A: 255}, color.RGBA{R: 107, G: 33, B: 168, A: 255}
+	case "bajipura":
+		return color.RGBA{R: 254, G: 215, B: 170, A: 255}, color.RGBA{R: 154, G: 52, B: 18, A: 255}
+	case "kelkui":
+		return color.RGBA{R: 204, G: 251, B: 241, A: 255}, color.RGBA{R: 17, G: 94, B: 89, A: 255}
+	case "valod (t)":
+		return color.RGBA{R: 254, G: 226, B: 226, A: 255}, color.RGBA{R: 153, G: 27, B: 27, A: 255}
+	default:
+		return color.RGBA{R: 226, G: 232, B: 240, A: 255}, color.RGBA{R: 51, G: 65, B: 85, A: 255}
+	}
 }

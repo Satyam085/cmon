@@ -36,18 +36,22 @@ type Record struct {
 	WAMessageID  string
 	APIID        string
 	ConsumerName string
+	Village      string
+	Belt         string
 }
 
 // Storage provides thread-safe storage for complaint data.
 type Storage struct {
-	mu                  sync.RWMutex
-	db                  *sql.DB
-	seen                map[string]bool   // complaintID → exists
-	messageIDs          map[string]string // complaintID → Telegram message ID
-	waMessageIDs        map[string]string // complaintID → WhatsApp message ID
+	mu                   sync.RWMutex
+	db                   *sql.DB
+	seen                 map[string]bool   // complaintID → exists
+	messageIDs           map[string]string // complaintID → Telegram message ID
+	waMessageIDs         map[string]string // complaintID → WhatsApp message ID
 	waMessageToComplaint map[string]string // waMessageID → complaintID (Reverse lookup)
-	apiIDs              map[string]string // complaintID → API ID
-	consumerNames       map[string]string // complaintID → Consumer name
+	apiIDs               map[string]string // complaintID → API ID
+	consumerNames        map[string]string // complaintID → Consumer name
+	villages             map[string]string // complaintID → village
+	belts                map[string]string // complaintID → belt
 }
 
 // PendingResolution stores info about a complaint awaiting resolution note
@@ -68,6 +72,8 @@ func New() *Storage {
 		waMessageToComplaint: make(map[string]string),
 		apiIDs:               make(map[string]string),
 		consumerNames:        make(map[string]string),
+		villages:             make(map[string]string),
+		belts:                make(map[string]string),
 	}
 
 	// Connect to SQLite
@@ -75,10 +81,10 @@ func New() *Storage {
 	if err != nil {
 		log.Fatalf("❌ Failed to open SQLite database %s: %v", dbFile, err)
 	}
-	
+
 	importTime := time.Now()
 	_ = importTime // for time package use
-	
+
 	// Configure connection pooling
 	db.SetMaxOpenConns(25)
 	db.SetMaxIdleConns(25)
@@ -108,6 +114,9 @@ func New() *Storage {
 	if err != nil {
 		log.Fatalf("❌ Failed to create tables: %v", err)
 	}
+
+	s.ensureComplaintColumn("village", "TEXT")
+	s.ensureComplaintColumn("belt", "TEXT")
 
 	// Run migration from old complaints.csv if needed
 	s.migrateFromCSV()
@@ -210,7 +219,7 @@ func (s *Storage) migrateFromCSV() {
 
 // loadFromDB loads all complaint data from SQLite into the in-memory maps.
 func (s *Storage) loadFromDB() {
-	rows, err := s.db.Query(`SELECT complaint_id, tg_message_id, wa_message_id, api_id, consumer_name FROM complaints`)
+	rows, err := s.db.Query(`SELECT complaint_id, tg_message_id, wa_message_id, api_id, consumer_name, village, belt FROM complaints`)
 	if err != nil {
 		log.Fatalf("❌ Failed to query database on load: %v", err)
 	}
@@ -218,8 +227,8 @@ func (s *Storage) loadFromDB() {
 
 	count := 0
 	for rows.Next() {
-		var complaintID, tgMessageID, waMessageID, apiID, consumerName sql.NullString
-		if err := rows.Scan(&complaintID, &tgMessageID, &waMessageID, &apiID, &consumerName); err != nil {
+		var complaintID, tgMessageID, waMessageID, apiID, consumerName, village, belt sql.NullString
+		if err := rows.Scan(&complaintID, &tgMessageID, &waMessageID, &apiID, &consumerName, &village, &belt); err != nil {
 			log.Printf("⚠️  Failed to scan row on load: %v", err)
 			continue
 		}
@@ -238,6 +247,12 @@ func (s *Storage) loadFromDB() {
 			}
 			if consumerName.Valid {
 				s.consumerNames[complaintID.String] = consumerName.String
+			}
+			if village.Valid {
+				s.villages[complaintID.String] = village.String
+			}
+			if belt.Valid {
+				s.belts[complaintID.String] = belt.String
 			}
 			count++
 		}
@@ -342,6 +357,20 @@ func (s *Storage) GetConsumerName(complaintID string) string {
 	return s.consumerNames[complaintID]
 }
 
+// GetVillage retrieves the stored village for a complaint.
+func (s *Storage) GetVillage(complaintID string) string {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.villages[complaintID]
+}
+
+// GetBelt retrieves the stored belt for a complaint.
+func (s *Storage) GetBelt(complaintID string) string {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.belts[complaintID]
+}
+
 // Exists checks if a complaint exists in memory.
 func (s *Storage) Exists(complaintID string) bool {
 	s.mu.RLock()
@@ -374,8 +403,33 @@ func (s *Storage) SaveMultiple(records []Record) error {
 	}
 
 	stmt, err := tx.Prepare(`
-		INSERT OR IGNORE INTO complaints (complaint_id, tg_message_id, wa_message_id, api_id, consumer_name) 
-		VALUES (?, ?, ?, ?, ?)
+		INSERT INTO complaints (complaint_id, tg_message_id, wa_message_id, api_id, consumer_name, village, belt)
+		VALUES (?, ?, ?, ?, ?, ?, ?)
+		ON CONFLICT(complaint_id) DO UPDATE SET
+			tg_message_id = CASE
+				WHEN excluded.tg_message_id != '' THEN excluded.tg_message_id
+				ELSE complaints.tg_message_id
+			END,
+			wa_message_id = CASE
+				WHEN excluded.wa_message_id != '' THEN excluded.wa_message_id
+				ELSE complaints.wa_message_id
+			END,
+			api_id = CASE
+				WHEN excluded.api_id != '' THEN excluded.api_id
+				ELSE complaints.api_id
+			END,
+			consumer_name = CASE
+				WHEN excluded.consumer_name != '' THEN excluded.consumer_name
+				ELSE complaints.consumer_name
+			END,
+			village = CASE
+				WHEN excluded.village != '' THEN excluded.village
+				ELSE complaints.village
+			END,
+			belt = CASE
+				WHEN excluded.belt != '' THEN excluded.belt
+				ELSE complaints.belt
+			END
 	`)
 	if err != nil {
 		tx.Rollback()
@@ -384,7 +438,7 @@ func (s *Storage) SaveMultiple(records []Record) error {
 	defer stmt.Close()
 
 	for _, r := range records {
-		if _, err := stmt.Exec(r.ComplaintID, r.MessageID, r.WAMessageID, r.APIID, r.ConsumerName); err != nil {
+		if _, err := stmt.Exec(r.ComplaintID, r.MessageID, r.WAMessageID, r.APIID, r.ConsumerName, r.Village, r.Belt); err != nil {
 			tx.Rollback()
 			return err
 		}
@@ -412,6 +466,12 @@ func (s *Storage) SaveMultiple(records []Record) error {
 		if r.ConsumerName != "" {
 			s.consumerNames[r.ComplaintID] = r.ConsumerName
 		}
+		if r.Village != "" {
+			s.villages[r.ComplaintID] = r.Village
+		}
+		if r.Belt != "" {
+			s.belts[r.ComplaintID] = r.Belt
+		}
 	}
 
 	return nil
@@ -437,6 +497,8 @@ func (s *Storage) Remove(complaintID string) error {
 	delete(s.waMessageIDs, complaintID)
 	delete(s.apiIDs, complaintID)
 	delete(s.consumerNames, complaintID)
+	delete(s.villages, complaintID)
+	delete(s.belts, complaintID)
 
 	return nil
 }
@@ -466,6 +528,8 @@ func (s *Storage) RemoveIfExists(complaintID string) (bool, error) {
 	delete(s.waMessageIDs, complaintID)
 	delete(s.apiIDs, complaintID)
 	delete(s.consumerNames, complaintID)
+	delete(s.villages, complaintID)
+	delete(s.belts, complaintID)
 
 	return true, nil
 }
@@ -523,4 +587,14 @@ func (s *Storage) getStorageStats() (int, error) {
 	var count int
 	err := s.db.QueryRow(`SELECT count(*) FROM complaints`).Scan(&count)
 	return count, err
+}
+
+func (s *Storage) ensureComplaintColumn(name, typ string) {
+	if _, err := s.db.Exec(fmt.Sprintf(`ALTER TABLE complaints ADD COLUMN %s %s`, name, typ)); err != nil {
+		// Ignore "duplicate column" style errors across SQLite variants.
+		if err.Error() != "SQL logic error: duplicate column name: "+name+" (1)" &&
+			err.Error() != "duplicate column name: "+name {
+			log.Fatalf("❌ Failed to ensure complaints.%s column: %v", name, err)
+		}
+	}
 }

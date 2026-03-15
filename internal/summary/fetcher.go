@@ -53,7 +53,7 @@ func FetchAllPendingDetails(sc *session.Client, stor *storage.Storage) ([]Compla
 	}
 
 	// Fetch all concurrently using goroutines
-	complaints := fetchAllConcurrent(sc, requests)
+	complaints := fetchAllConcurrent(sc, stor, requests)
 
 	if len(complaints) == 0 {
 		return nil, fmt.Errorf("failed to fetch any complaint details")
@@ -65,7 +65,7 @@ func FetchAllPendingDetails(sc *session.Client, stor *storage.Storage) ([]Compla
 
 // fetchAllConcurrent fetches all complaints concurrently using goroutines.
 // A semaphore limits concurrency to 10 to avoid overwhelming the server.
-func fetchAllConcurrent(sc *session.Client, requests []complaintRequest) []Complaint {
+func fetchAllConcurrent(sc *session.Client, stor *storage.Storage, requests []complaintRequest) []Complaint {
 	type result struct {
 		complaint *Complaint
 		err       error
@@ -83,7 +83,7 @@ func fetchAllConcurrent(sc *session.Client, requests []complaintRequest) []Compl
 			defer wg.Done()
 			sem <- struct{}{}        // acquire slot
 			defer func() { <-sem }() // release slot
-			c, err := fetchComplaintDetail(sc, req.apiID, req.complaintNo)
+			c, err := fetchComplaintDetail(sc, stor, req.apiID, req.complaintNo)
 			results[idx] = result{complaint: c, err: err}
 		}(i, r)
 	}
@@ -104,7 +104,7 @@ func fetchAllConcurrent(sc *session.Client, requests []complaintRequest) []Compl
 }
 
 // fetchComplaintDetail fetches a single complaint's details from the API.
-func fetchComplaintDetail(sc *session.Client, apiID, complaintNumber string) (*Complaint, error) {
+func fetchComplaintDetail(sc *session.Client, stor *storage.Storage, apiID, complaintNumber string) (*Complaint, error) {
 	apiURL := fmt.Sprintf("https://complaint.dgvcl.com/api/complaint-record/%s", apiID)
 
 	body, err := sc.GetJSON(apiURL)
@@ -129,6 +129,8 @@ func fetchComplaintDetail(sc *session.Client, apiID, complaintNumber string) (*C
 		MobileNo:     safeStr(detail["mobile_no"]),
 		Address:      safeStr(detail["exact_location"]),
 		Area:         safeStr(detail["area"]),
+		Village:      stor.GetVillage(complaintNumber),
+		Belt:         stor.GetBelt(complaintNumber),
 		Description:  safeStr(detail["description"]),
 		ComplainDate: safeStr(detail["complain_date"]),
 	}, nil

@@ -38,6 +38,8 @@ type Details struct {
 	ComplainDate    interface{} `json:"complain_date"`
 	ExactLocation   interface{} `json:"exact_location"`
 	Area            interface{} `json:"area"`
+	Village         string      `json:"village,omitempty"`
+	Belt            string      `json:"belt,omitempty"`
 }
 
 // ProcessResult represents the result of processing a single complaint.

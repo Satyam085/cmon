@@ -72,7 +72,7 @@ type Client struct {
 	lastReqTime time.Time
 	// httpClient is a persistent client reused across all API calls for
 	// connection pooling — creating a new client per call defeats TCP reuse.
-	httpClient  *http.Client
+	httpClient *http.Client
 }
 
 // Message types for Telegram API
@@ -306,6 +306,7 @@ func (c *Client) SendComplaintMessage(complaintJSON string, complaintNumber stri
 			"👤 %s\n"+
 			"📞 %s\n"+
 			"🆔 Consumer: %s\n"+
+			"🏷️ Belt: %s\n"+
 			"📅 %s\n\n"+
 			"💬 <b>Details:</b>\n%s\n"+
 			"📍 %s, %s",
@@ -313,6 +314,7 @@ func (c *Client) SendComplaintMessage(complaintJSON string, complaintNumber stri
 		getValue("complainant_name"),
 		getValue("mobile_no"),
 		getValue("consumer_no"),
+		defaultIfEmpty(getValue("belt"), "Unknown"),
 		getValue("complain_date"),
 		getValue("description"),
 		getValue("exact_location"),
@@ -322,7 +324,7 @@ func (c *Client) SendComplaintMessage(complaintJSON string, complaintNumber stri
 	// Append Gujarati translation if available
 	if gujaratiText != "" {
 		message += "\n\n" + strings.Repeat("─", 10) + "\n" +
-			 gujaratiText
+			gujaratiText
 	}
 
 	// Create inline keyboard with "Mark as Resolved" button
@@ -361,6 +363,13 @@ func (c *Client) SendComplaintMessage(complaintJSON string, complaintNumber stri
 
 	log.Println("   ✓ Complaint successfully sent to Telegram")
 	return messageID, nil
+}
+
+func defaultIfEmpty(value, fallback string) string {
+	if strings.TrimSpace(value) == "" {
+		return fallback
+	}
+	return value
 }
 
 // SendCriticalAlert sends a critical failure alert to Telegram.

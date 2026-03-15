@@ -497,7 +497,11 @@ func buildTextSummary(complaints []summaryComplaint) string {
 	var b bytes.Buffer
 	b.WriteString(fmt.Sprintf("📋 *%d Pending Complaints*\n\n", len(complaints)))
 	for i, c := range complaints {
-		b.WriteString(fmt.Sprintf("%d. #%s — %s\n   📍 %s\n", i+1, c.ComplainNo, c.Name, c.Address))
+		belt := c.Belt
+		if strings.TrimSpace(belt) == "" {
+			belt = "Unknown"
+		}
+		b.WriteString(fmt.Sprintf("%d. #%s — %s\n   🏷️ %s\n   📍 %s\n", i+1, c.ComplainNo, c.Name, belt, c.Address))
 	}
 	return b.String()
 }
