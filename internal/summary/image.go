@@ -37,6 +37,7 @@ const (
 	cellPaddingY  = 16
 	minRowHeight  = 76
 	headerHeight  = 88
+	groupHeaderH  = 64
 	fontSize      = 26
 	headerFontSz  = 26
 	titleFontSz   = 40
@@ -44,7 +45,6 @@ const (
 	footerPadding = 80
 	minColWidth   = 110
 	maxAddrWidth  = 360.0
-	maxBeltWidth  = 220.0
 	maxDescWidth  = 440.0
 )
 
@@ -61,6 +61,11 @@ var (
 	footerColor     = color.RGBA{R: 100, G: 116, B: 139, A: 255} // Muted slate
 )
 
+type complaintGroup struct {
+	belt       string
+	complaints []Complaint
+}
+
 // column definition for the table.
 type column struct {
 	header   string
@@ -76,13 +81,16 @@ var columns = []column{
 	{"Mobile No", func(c *Complaint) string { return c.MobileNo }, 0},
 	{"Address", func(c *Complaint) string { return c.Address }, maxAddrWidth},
 	{"Area", func(c *Complaint) string { return c.Area }, 0},
-	{"Belt", func(c *Complaint) string { return c.Belt }, maxBeltWidth},
 	{"Description", func(c *Complaint) string { return c.Description }, maxDescWidth},
 	{"Date", func(c *Complaint) string { return c.ComplainDate }, 0},
 }
 
 // findFont locates a font file across Linux and Windows paths.
-func findFont(bold bool) string {
+// It walks candidates in order and returns the first path that exists on disk.
+// Returns ("", error) if no candidate is found so the caller can surface a
+// useful error instead of getting a misleading "file not found" for the first
+// candidate path.
+func findFont(bold bool) (string, error) {
 	var candidates []string
 	if runtime.GOOS == "windows" {
 		winRoot := os.Getenv("WINDIR")
@@ -103,22 +111,27 @@ func findFont(bold bool) string {
 	} else {
 		if bold {
 			candidates = []string{
-				"/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf",
-				"/usr/share/fonts/TTF/DejaVuSans-Bold.ttf",
+				"/usr/share/fonts/dejavu-sans-fonts/DejaVuSans-Bold.ttf", // Fedora
+				"/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf",   // Debian/Ubuntu
+				"/usr/share/fonts/TTF/DejaVuSans-Bold.ttf",               // Arch
+				"/usr/share/fonts/dejavu/DejaVuSans-Bold.ttf",            // Fedora/RHEL alt
 			}
 		} else {
 			candidates = []string{
-				"/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
-				"/usr/share/fonts/TTF/DejaVuSans.ttf",
+				"/usr/share/fonts/dejavu-sans-fonts/DejaVuSans.ttf", // Fedora
+				"/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",   // Debian/Ubuntu
+				"/usr/share/fonts/TTF/DejaVuSans.ttf",               // Arch
+				"/usr/share/fonts/dejavu/DejaVuSans.ttf",            // Fedora/RHEL alt
 			}
 		}
 	}
+
 	for _, path := range candidates {
 		if _, err := os.Stat(path); err == nil {
-			return path
+			return path, nil
 		}
 	}
-	return candidates[0]
+	return "", fmt.Errorf("no font found; tried: %s", strings.Join(candidates, ", "))
 }
 
 // wrapText splits text into multiple lines to fit within maxWidth.
@@ -189,16 +202,16 @@ func RenderTable(complaints []Complaint) ([]byte, error) {
 		return nil, fmt.Errorf("no complaints to render")
 	}
 
-	// Sort by complaint date ascending
-	sort.Slice(complaints, func(i, j int) bool {
-		if complaints[i].Belt != complaints[j].Belt {
-			return complaints[i].Belt < complaints[j].Belt
-		}
-		return complaints[i].ComplainDate < complaints[j].ComplainDate
-	})
+	groups := groupComplaints(complaints)
 
-	boldFont := findFont(true)
-	regularFont := findFont(false)
+	boldFont, err := findFont(true)
+	if err != nil {
+		return nil, fmt.Errorf("failed to load bold font: %w", err)
+	}
+	regularFont, err := findFont(false)
+	if err != nil {
+		return nil, fmt.Errorf("failed to load regular font: %w", err)
+	}
 
 	// ---- Step 1: Measure column widths ----
 	tmpDC := gg.NewContext(1, 1)
@@ -219,13 +232,15 @@ func RenderTable(complaints []Complaint) ([]byte, error) {
 	if err := tmpDC.LoadFontFace(regularFont, fontSize); err != nil {
 		return nil, fmt.Errorf("failed to load regular font: %w", err)
 	}
-	for _, c := range complaints {
-		c := c
-		for i, col := range columns {
-			w, _ := tmpDC.MeasureString(col.field(&c))
-			needed := w + cellPaddingX*2 + 4
-			if needed > colWidths[i] {
-				colWidths[i] = needed
+	for _, group := range groups {
+		for _, c := range group.complaints {
+			c := c
+			for i, col := range columns {
+				w, _ := tmpDC.MeasureString(col.field(&c))
+				needed := w + cellPaddingX*2 + 4
+				if needed > colWidths[i] {
+					colWidths[i] = needed
+				}
 			}
 		}
 	}
@@ -238,17 +253,20 @@ func RenderTable(complaints []Complaint) ([]byte, error) {
 	}
 
 	// Compute row heights (for text wrapping)
-	rowHeights := computeRowHeights(tmpDC, complaints, colWidths)
+	rowHeightsByGroup := make([][]float64, len(groups))
+	var totalRowHeight float64
+	for i, group := range groups {
+		rowHeightsByGroup[i] = computeRowHeights(tmpDC, group.complaints, colWidths)
+		totalRowHeight += float64(groupHeaderH)
+		for _, h := range rowHeightsByGroup[i] {
+			totalRowHeight += h
+		}
+	}
 
 	// ---- Step 2: Calculate canvas size ----
 	var totalWidth float64
 	for _, w := range colWidths {
 		totalWidth += w
-	}
-
-	var totalRowHeight float64
-	for _, h := range rowHeights {
-		totalRowHeight += h
 	}
 
 	canvasWidth := totalWidth + 80 // 40px margin each side
@@ -295,50 +313,49 @@ func RenderTable(complaints []Complaint) ([]byte, error) {
 	lineSpacing := lineH + 4
 	curY := tableY + float64(headerHeight)
 
-	for rowIdx, c := range complaints {
-		c := c
-		rh := rowHeights[rowIdx]
+	rowIdx := 0
+	for groupIdx, group := range groups {
+		drawGroupHeader(dc, boldFont, tableX, curY, totalWidth, group.belt, len(group.complaints))
+		curY += float64(groupHeaderH)
 
-		// Alternating row background
-		if rowIdx%2 == 0 {
-			dc.SetColor(rowEvenColor)
-		} else {
-			dc.SetColor(rowOddColor)
-		}
-		dc.DrawRectangle(tableX, curY, totalWidth, rh)
-		dc.Fill()
+		for complaintIdx, c := range group.complaints {
+			c := c
+			rh := rowHeightsByGroup[groupIdx][complaintIdx]
 
-		// Row border (bottom)
-		dc.SetColor(borderColor)
-		dc.SetLineWidth(0.5)
-		dc.DrawLine(tableX, curY+rh, tableX+totalWidth, curY+rh)
-		dc.Stroke()
+			if rowIdx%2 == 0 {
+				dc.SetColor(rowEvenColor)
+			} else {
+				dc.SetColor(rowOddColor)
+			}
+			dc.DrawRectangle(tableX, curY, totalWidth, rh)
+			dc.Fill()
 
-		// Row text with wrapping
-		dc.SetColor(textColor)
-		x := tableX
-		for i, col := range columns {
-			if col.header == "Belt" {
-				drawBeltCell(dc, x, curY, colWidths[i], rh, c.Belt)
+			dc.SetColor(borderColor)
+			dc.SetLineWidth(0.5)
+			dc.DrawLine(tableX, curY+rh, tableX+totalWidth, curY+rh)
+			dc.Stroke()
+
+			dc.LoadFontFace(regularFont, fontSize)
+			dc.SetColor(textColor)
+			x := tableX
+			for i, col := range columns {
+				text := col.field(&c)
+				innerWidth := colWidths[i] - cellPaddingX*2
+				wrapped := wrapText(dc, text, innerWidth)
+
+				totalTextH := float64(len(wrapped)) * lineSpacing
+				startY := curY + (rh-totalTextH)/2 + lineH
+
+				for lineIdx, line := range wrapped {
+					ly := startY + float64(lineIdx)*lineSpacing
+					dc.DrawString(line, x+cellPaddingX, ly)
+				}
 				x += colWidths[i]
-				continue
 			}
 
-			text := col.field(&c)
-			innerWidth := colWidths[i] - cellPaddingX*2
-			wrapped := wrapText(dc, text, innerWidth)
-
-			totalTextH := float64(len(wrapped)) * lineSpacing
-			startY := curY + (rh-totalTextH)/2 + lineH // vertically center
-
-			for lineIdx, line := range wrapped {
-				ly := startY + float64(lineIdx)*lineSpacing
-				dc.DrawString(line, x+cellPaddingX, ly)
-			}
-			x += colWidths[i]
+			curY += rh
+			rowIdx++
 		}
-
-		curY += rh
 	}
 
 	// Outer table border
@@ -432,4 +449,101 @@ func beltColors(belt string) (color.Color, color.Color) {
 	default:
 		return color.RGBA{R: 226, G: 232, B: 240, A: 255}, color.RGBA{R: 51, G: 65, B: 85, A: 255}
 	}
+}
+
+func groupComplaints(complaints []Complaint) []complaintGroup {
+	grouped := make(map[string][]Complaint)
+	for _, complaint := range complaints {
+		belt := strings.TrimSpace(complaint.Belt)
+		if belt == "" {
+			belt = "Unknown"
+			complaint.Belt = belt
+		}
+		grouped[belt] = append(grouped[belt], complaint)
+	}
+
+	groups := make([]complaintGroup, 0, len(grouped))
+	for belt, items := range grouped {
+		sort.Slice(items, func(i, j int) bool {
+			return complaintDateLess(items[i], items[j])
+		})
+		groups = append(groups, complaintGroup{belt: belt, complaints: items})
+	}
+
+	sort.Slice(groups, func(i, j int) bool {
+		if len(groups[i].complaints) == 0 || len(groups[j].complaints) == 0 {
+			return groups[i].belt < groups[j].belt
+		}
+		left := groups[i].complaints[0]
+		right := groups[j].complaints[0]
+		if complaintDateLess(left, right) {
+			return true
+		}
+		if complaintDateLess(right, left) {
+			return false
+		}
+		return groups[i].belt < groups[j].belt
+	})
+
+	return groups
+}
+
+func complaintDateLess(a, b Complaint) bool {
+	at, aok := parseComplaintDate(a.ComplainDate)
+	bt, bok := parseComplaintDate(b.ComplainDate)
+	if aok && bok {
+		if at.Equal(bt) {
+			return a.ComplainNo < b.ComplainNo
+		}
+		return at.Before(bt)
+	}
+	if aok != bok {
+		return aok
+	}
+	if a.ComplainDate == b.ComplainDate {
+		return a.ComplainNo < b.ComplainNo
+	}
+	return a.ComplainDate < b.ComplainDate
+}
+
+func parseComplaintDate(value string) (time.Time, bool) {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return time.Time{}, false
+	}
+
+	layouts := []string{
+		"2006-01-02 15:04:05",
+		"2006-01-02 15:04",
+		"2006-01-02",
+		"02-01-2006 15:04:05",
+		"02-01-2006 15:04",
+		"02-01-2006",
+		"02/01/2006 15:04:05",
+		"02/01/2006 15:04",
+		"02/01/2006",
+	}
+	for _, layout := range layouts {
+		if ts, err := time.ParseInLocation(layout, value, time.Local); err == nil {
+			return ts, true
+		}
+	}
+	return time.Time{}, false
+}
+
+func drawGroupHeader(dc *gg.Context, boldFont string, x, y, width float64, belt string, count int) {
+	fill, text := beltColors(belt)
+	dc.SetColor(fill)
+	dc.DrawRectangle(x, y, width, float64(groupHeaderH))
+	dc.Fill()
+
+	dc.SetColor(borderColor)
+	dc.SetLineWidth(0.5)
+	dc.DrawLine(x, y+float64(groupHeaderH), x+width, y+float64(groupHeaderH))
+	dc.Stroke()
+
+	dc.LoadFontFace(boldFont, headerFontSz-2)
+	dc.SetColor(text)
+	label := fmt.Sprintf("%s Belt  •  %d complaints", belt, count)
+	dc.DrawString(label, x+cellPaddingX, y+float64(groupHeaderH)/2+10)
 }

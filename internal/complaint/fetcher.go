@@ -293,18 +293,18 @@ func buildWhatsAppMessage(details Details, gujaratiText string) string {
 
 	msg := fmt.Sprintf(
 		"📋 Complaint: %s\n\n"+
+			"🏷️ Belt: %s\n"+
 			"👤 %s\n"+
 			"📞 %s\n"+
 			"🆔 Consumer: %s\n"+
-			"🏷️ Belt: %s\n"+
 			"📅 %s\n\n"+
 			"💬 Details:\n%s\n"+
 			"📍 %s, %s",
 		str(details.ComplainNo),
+		displayBelt(details.Belt),
 		str(details.ComplainantName),
 		str(details.MobileNo),
 		str(details.ConsumerNo),
-		displayBelt(details.Belt),
 		str(details.ComplainDate),
 		str(details.Description),
 		str(details.ExactLocation),

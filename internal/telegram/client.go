@@ -303,18 +303,18 @@ func (c *Client) SendComplaintMessage(complaintJSON string, complaintNumber stri
 	// Format message with emojis and structure
 	message := fmt.Sprintf(
 		"📋 Complaint : %s\n\n"+
+			"🏷️ Belt: %s\n"+
 			"👤 %s\n"+
 			"📞 %s\n"+
 			"🆔 Consumer: %s\n"+
-			"🏷️ Belt: %s\n"+
 			"📅 %s\n\n"+
 			"💬 <b>Details:</b>\n%s\n"+
 			"📍 %s, %s",
 		getValue("complain_no"),
+		defaultIfEmpty(getValue("belt"), "Unknown"),
 		getValue("complainant_name"),
 		getValue("mobile_no"),
 		getValue("consumer_no"),
-		defaultIfEmpty(getValue("belt"), "Unknown"),
 		getValue("complain_date"),
 		getValue("description"),
 		getValue("exact_location"),
