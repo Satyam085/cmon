@@ -112,9 +112,10 @@ func Resolve(area, loc, desc string) Entry {
 		return Entry{}
 	}
 
-	// If Valod is the top scorer but any other village also clears the
-	// threshold, prefer that village instead.
-	if strings.EqualFold(best.Village, "Valod") && bestNonValod.score >= 72 {
+	// If Valod is the top scorer but another village is both above the minimum
+	// threshold and reasonably close, prefer that village instead. This keeps
+	// obvious Valod matches from being overridden by weak fuzzy matches.
+	if strings.EqualFold(best.Village, "Valod") && bestNonValod.score >= 72 && bestNonValod.score >= best.score-20 {
 		best = bestNonValod
 	}
 

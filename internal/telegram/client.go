@@ -24,7 +24,6 @@ import (
 	"mime/multipart"
 	"net/http"
 	"os"
-	"sort"
 
 	"strings"
 	"sync"
@@ -152,8 +151,6 @@ type EditMessageRequest struct {
 	ParseMode   string                `json:"parse_mode"`
 	ReplyMarkup *InlineKeyboardMarkup `json:"reply_markup,omitempty"`
 }
-
-const pendingSummaryMessageStateKey = "telegram_pending_summary_message_id"
 
 // NewClient creates a new Telegram client from environment variables.
 //
@@ -477,122 +474,6 @@ func (c *Client) EditMessageText(chatID, messageID, newText string) error {
 
 	log.Println("   ✓ Message successfully edited")
 	return nil
-}
-
-// SyncPendingSummaryMessage ensures there is a pinned summary message showing
-// the current pending complaint counts by belt.
-func (c *Client) SyncPendingSummaryMessage(stor *storage.Storage) error {
-	if c == nil || stor == nil {
-		return nil
-	}
-
-	summaryText := buildPendingSummaryText(stor)
-
-	if messageID, ok := stor.GetAppState(pendingSummaryMessageStateKey); ok && strings.TrimSpace(messageID) != "" {
-		if err := c.EditMessageText(c.ChatID, messageID, summaryText); err == nil {
-			return nil
-		} else {
-			log.Printf("⚠️  Failed to update pinned pending summary, creating a new one: %v", err)
-		}
-	}
-
-	result, err := c.doRequest("sendMessage", Message{
-		ChatID:                c.ChatID,
-		Text:                  summaryText,
-		ParseMode:             "HTML",
-		DisableWebPagePreview: true,
-	})
-	if err != nil {
-		return fmt.Errorf("failed to send pending summary message: %w", err)
-	}
-
-	messageID := extractMessageID(result)
-	if messageID == "" {
-		return fmt.Errorf("failed to extract pending summary message ID from Telegram response")
-	}
-
-	if err := stor.SetAppState(pendingSummaryMessageStateKey, messageID); err != nil {
-		return err
-	}
-
-	if err := c.pinChatMessage(messageID); err != nil {
-		return fmt.Errorf("failed to pin pending summary message: %w", err)
-	}
-
-	return nil
-}
-
-func (c *Client) pinChatMessage(messageID string) error {
-	if c == nil || strings.TrimSpace(messageID) == "" {
-		return nil
-	}
-
-	payload := map[string]interface{}{
-		"chat_id":              c.ChatID,
-		"message_id":           messageID,
-		"disable_notification": true,
-	}
-
-	_, err := c.doRequest("pinChatMessage", payload)
-	if err != nil {
-		return err
-	}
-
-	return nil
-}
-
-func buildPendingSummaryText(stor *storage.Storage) string {
-	counts := stor.GetPendingCountsByBelt()
-
-	beltOrder := []string{"Buhari", "Rupvada", "Bhimpor", "Shiker", "Bajipura", "Kelkui", "Valod (T)"}
-	var lines []string
-	total := 0
-
-	for _, beltName := range beltOrder {
-		count := counts[beltName]
-		total += count
-
-		lines = append(lines, fmt.Sprintf("%s <b>%s</b>: %d", belt.StyleFor(beltName).Emoji, belt.DisplayName(beltName), count))
-	}
-
-	if unknownCount := counts[""]; unknownCount > 0 {
-		total += unknownCount
-		lines = append(lines, fmt.Sprintf("%s <b>%s</b>: %d", belt.StyleFor("").Emoji, belt.DisplayName(""), unknownCount))
-	}
-
-	var extraBelts []string
-	for beltName := range counts {
-		if strings.TrimSpace(beltName) == "" {
-			continue
-		}
-		if containsBelt(beltOrder, beltName) {
-			continue
-		}
-		extraBelts = append(extraBelts, beltName)
-	}
-	sort.Strings(extraBelts)
-
-	for _, beltName := range extraBelts {
-		count := counts[beltName]
-		total += count
-		lines = append(lines, fmt.Sprintf("%s <b>%s</b>: %d", belt.StyleFor(beltName).Emoji, belt.DisplayName(beltName), count))
-	}
-
-	return fmt.Sprintf(
-		"📌 <b>Pending Complaints By Belt</b>\n\n%s\n\n📊 <b>Total Pending:</b> %d\n🕐 <b>Updated:</b> %s",
-		strings.Join(lines, "\n"),
-		total,
-		time.Now().Format("02 Jan 2006, 03:04 PM"),
-	)
-}
-
-func containsBelt(items []string, target string) bool {
-	for _, item := range items {
-		if strings.EqualFold(strings.TrimSpace(item), strings.TrimSpace(target)) {
-			return true
-		}
-	}
-	return false
 }
 
 // SendPhoto sends a photo (PNG bytes) to a Telegram chat.
@@ -1061,10 +942,6 @@ func (c *Client) handleMessage(ctx context.Context, sc *session.Client, message 
 		log.Printf("⚠️  Failed to remove from storage: %v\n", err)
 	} else if !removed {
 		log.Printf("ℹ️  Complaint %s was already removed from storage\n", pending.ComplaintNumber)
-	}
-
-	if err := c.SyncPendingSummaryMessage(stor); err != nil {
-		log.Printf("⚠️  Failed to sync Telegram pending summary after manual resolution: %v\n", err)
 	}
 
 	log.Printf("✓ Successfully resolved complaint %s with note\n", pending.ComplaintNumber)

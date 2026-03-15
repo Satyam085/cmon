@@ -122,11 +122,6 @@ func New() *Storage {
 			prompt_message_id INTEGER,
 			created_at DATETIME DEFAULT CURRENT_TIMESTAMP
 		);
-		CREATE TABLE IF NOT EXISTS app_state (
-			key TEXT PRIMARY KEY,
-			value TEXT,
-			updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
-		);
 	`)
 	if err != nil {
 		log.Fatalf("❌ Failed to create tables: %v", err)
@@ -619,36 +614,6 @@ func (s *Storage) RemovePendingResolution(userID int64) {
 	if err != nil {
 		log.Printf("⚠️  Failed to delete pending resolution for user %d: %v", userID, err)
 	}
-}
-
-// GetAppState fetches a persisted app-level setting.
-func (s *Storage) GetAppState(key string) (string, bool) {
-	var value string
-	err := s.db.QueryRow(`SELECT value FROM app_state WHERE key = ?`, key).Scan(&value)
-	if err == sql.ErrNoRows {
-		return "", false
-	}
-	if err != nil {
-		log.Printf("⚠️  Failed to read app state %s: %v", key, err)
-		return "", false
-	}
-	return value, true
-}
-
-// SetAppState stores a persisted app-level setting.
-func (s *Storage) SetAppState(key, value string) error {
-	_, err := s.db.Exec(`
-		INSERT INTO app_state (key, value, updated_at)
-		VALUES (?, ?, CURRENT_TIMESTAMP)
-		ON CONFLICT(key) DO UPDATE SET
-			value = excluded.value,
-			updated_at = CURRENT_TIMESTAMP
-	`, key, value)
-	if err != nil {
-		log.Printf("⚠️  Failed to save app state %s: %v", key, err)
-		return err
-	}
-	return nil
 }
 
 // Close gracefully closes the SQLite database connection.

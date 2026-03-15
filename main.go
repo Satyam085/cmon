@@ -154,12 +154,6 @@ func main() {
 		log.Fatal("❌ Failed initial fetch after all retries:", fetchErr)
 	}
 
-	if tg != nil {
-		if err := tg.SyncPendingSummaryMessage(stor); err != nil {
-			log.Printf("⚠️  Failed to sync Telegram pending summary on startup: %v", err)
-		}
-	}
-
 	healthMonitor.UpdateFetchStatus("success")
 
 	log.Printf("⏰ Running — next check in %v\n", cfg.FetchInterval)
@@ -360,10 +354,5 @@ func markResolvedComplaints(stor *storage.Storage, tg *telegram.Client, wa *what
 
 	if resolvedCount > 0 {
 		log.Printf("🎉 Marked %d complaints as resolved", resolvedCount)
-		if tg != nil {
-			if err := tg.SyncPendingSummaryMessage(stor); err != nil {
-				log.Printf("⚠️  Failed to sync Telegram pending summary after resolution sweep: %v", err)
-			}
-		}
 	}
 }

@@ -252,11 +252,6 @@ func (f *Fetcher) processComplaintsConcurrently(complaints []Link) {
 		if err := f.storage.SaveMultiple(recordsToSave); err != nil {
 			log.Println("    ⚠️  Failed to save records:", err)
 		}
-		if f.tg != nil {
-			if err := f.tg.SyncPendingSummaryMessage(f.storage); err != nil {
-				log.Println("    ⚠️  Failed to sync Telegram pending summary:", err)
-			}
-		}
 	}
 
 	// Phase 5: WhatsApp Notifications

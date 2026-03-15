@@ -36,3 +36,10 @@ func TestResolvePrefersKanjodOverTalValod(t *testing.T) {
 		t.Fatalf("expected Kanajod/Bhimpor, got %#v", match)
 	}
 }
+
+func TestResolveKeepsStrongValodMatchOverWeakFuzzyMatch(t *testing.T) {
+	match := Resolve("", "valod POOL FALIYA ANAND VIHAR NI SAME, VALOD", "")
+	if match.Village != "Valod" || match.Belt != "Valod (T)" {
+		t.Fatalf("expected Valod/Valod (T), got %#v", match)
+	}
+}
