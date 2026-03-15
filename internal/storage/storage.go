@@ -383,6 +383,23 @@ func (s *Storage) GetBelt(complaintID string) string {
 	return s.belts[complaintID]
 }
 
+// UpdateBelt persists a belt reassignment for an existing complaint.
+func (s *Storage) UpdateBelt(complaintID, belt string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	if !s.seen[complaintID] {
+		return fmt.Errorf("complaint %s not found in storage", complaintID)
+	}
+
+	if _, err := s.db.Exec(`UPDATE complaints SET belt = ? WHERE complaint_id = ?`, belt, complaintID); err != nil {
+		return err
+	}
+
+	s.belts[complaintID] = belt
+	return nil
+}
+
 // Exists checks if a complaint exists in memory.
 func (s *Storage) Exists(complaintID string) bool {
 	s.mu.RLock()

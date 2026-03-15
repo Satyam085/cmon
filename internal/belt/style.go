@@ -5,6 +5,27 @@ import (
 	"strings"
 )
 
+var knownBelts = []string{
+	"Buhari",
+	"Rupvada",
+	"Bhimpor",
+	"Shiker",
+	"Bajipura",
+	"Kelkui",
+	"Valod (T)",
+}
+
+var canonicalBelts = map[string]string{
+	"buhari":   "Buhari",
+	"rupvada":  "Rupvada",
+	"bhimpor":  "Bhimpor",
+	"shiker":   "Shiker",
+	"bajipura": "Bajipura",
+	"kelkui":   "Kelkui",
+	"valod":    "Valod (T)",
+	"valodt":   "Valod (T)",
+}
+
 type Style struct {
 	Label string
 	Emoji string
@@ -12,7 +33,27 @@ type Style struct {
 	Text  color.Color
 }
 
+func All() []string {
+	out := make([]string, len(knownBelts))
+	copy(out, knownBelts)
+	return out
+}
+
+func Canonicalize(name string) (string, bool) {
+	key := beltKey(name)
+	if key == "" {
+		return "", false
+	}
+
+	canonical, ok := canonicalBelts[key]
+	return canonical, ok
+}
+
 func DisplayName(name string) string {
+	if canonical, ok := Canonicalize(name); ok {
+		return canonical
+	}
+
 	label := strings.TrimSpace(name)
 	if label == "" {
 		return "Unknown"
@@ -86,4 +127,21 @@ func StyleFor(name string) Style {
 			Text:  color.RGBA{R: 51, G: 65, B: 85, A: 255},
 		}
 	}
+}
+
+func beltKey(name string) string {
+	name = strings.ToLower(strings.TrimSpace(name))
+	if name == "" {
+		return ""
+	}
+
+	var b strings.Builder
+	b.Grow(len(name))
+	for _, r := range name {
+		if (r >= 'a' && r <= 'z') || (r >= '0' && r <= '9') {
+			b.WriteRune(r)
+		}
+	}
+
+	return b.String()
 }

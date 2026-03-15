@@ -806,6 +806,11 @@ func (c *Client) handleMessage(ctx context.Context, sc *session.Client, message 
 		return
 	}
 
+	if isMoveCommand(message.Text) {
+		c.handleMoveCommand(message, stor)
+		return
+	}
+
 	// Handle /summary command
 	if strings.TrimSpace(message.Text) == "/summary" {
 		c.handleSummaryCommand(ctx, sc, stor)
@@ -1006,4 +1011,124 @@ func (c *Client) handleSummaryCommand(ctx context.Context, sc *session.Client, s
 	}
 
 	log.Println("✓ Summary image sent successfully")
+}
+
+func (c *Client) handleMoveCommand(message *IncomingMessage, stor *storage.Storage) {
+	text := strings.TrimSpace(message.Text)
+	args := strings.Fields(text)
+
+	var complaintID string
+	var beltInput string
+
+	switch {
+	case len(args) >= 2 && message.ReplyToMessage != nil:
+		complaintID = extractComplaintIDFromText(message.ReplyToMessage.Text)
+		beltInput = strings.TrimSpace(strings.TrimPrefix(text, args[0]))
+	case len(args) >= 3:
+		complaintID = strings.TrimSpace(args[1])
+		beltInput = strings.TrimSpace(strings.Join(args[2:], " "))
+	default:
+		c.sendMoveUsage()
+		return
+	}
+
+	if complaintID == "" {
+		c.sendTextMessage("❌ Could not find the complaint number. Reply to a complaint message with <code>/move belt-name</code> or use <code>/move complaint_id belt-name</code>.", "HTML")
+		return
+	}
+
+	newBelt, ok := belt.Canonicalize(beltInput)
+	if !ok {
+		c.sendTextMessage(fmt.Sprintf("❌ Unknown belt <b>%s</b>.\nValid belts: <code>%s</code>", htmlEscape(strings.TrimSpace(beltInput)), strings.Join(belt.All(), ", ")), "HTML")
+		return
+	}
+
+	if !stor.Exists(complaintID) {
+		c.sendTextMessage(fmt.Sprintf("❌ Complaint <b>%s</b> is not in active storage.", htmlEscape(complaintID)), "HTML")
+		return
+	}
+
+	oldBelt := belt.DisplayName(stor.GetBelt(complaintID))
+	if err := stor.UpdateBelt(complaintID, newBelt); err != nil {
+		log.Printf("⚠️  Failed to move complaint %s to %s: %v\n", complaintID, newBelt, err)
+		c.sendTextMessage(fmt.Sprintf("❌ Failed to update complaint <b>%s</b>.", htmlEscape(complaintID)), "HTML")
+		return
+	}
+
+	if message.ReplyToMessage != nil && message.ReplyToMessage.Text != "" {
+		updatedText, changed := rewriteComplaintBeltLine(message.ReplyToMessage.Text, newBelt)
+		if changed {
+			_, err := c.doRequest("editMessageText", EditMessageRequest{
+				ChatID:      c.ChatID,
+				MessageID:   fmt.Sprintf("%d", message.ReplyToMessage.MessageID),
+				Text:        updatedText,
+				ParseMode:   "HTML",
+				ReplyMarkup: nil,
+			})
+			if err != nil {
+				log.Printf("⚠️  Failed to edit complaint message for %s after move: %v\n", complaintID, err)
+			}
+		}
+	}
+
+	c.sendTextMessage(fmt.Sprintf("✅ Complaint <b>%s</b> moved from <b>%s</b> to <b>%s</b>.", htmlEscape(complaintID), htmlEscape(oldBelt), htmlEscape(newBelt)), "HTML")
+}
+
+func (c *Client) sendMoveUsage() {
+	c.sendTextMessage(
+		fmt.Sprintf("Usage:\n<code>/move complaint_id belt-name</code>\nOr reply to a complaint with <code>/move belt-name</code>\n\nValid belts: <code>%s</code>", strings.Join(belt.All(), ", ")),
+		"HTML",
+	)
+}
+
+func (c *Client) sendTextMessage(text, parseMode string) {
+	msg := Message{
+		ChatID:    c.ChatID,
+		Text:      text,
+		ParseMode: parseMode,
+	}
+	c.doRequest("sendMessage", msg)
+}
+
+func isMoveCommand(text string) bool {
+	fields := strings.Fields(strings.TrimSpace(text))
+	if len(fields) == 0 {
+		return false
+	}
+
+	return fields[0] == "/move"
+}
+
+func extractComplaintIDFromText(text string) string {
+	const prefix = "📋 Complaint : "
+
+	text = strings.TrimSpace(text)
+	if !strings.HasPrefix(text, prefix) {
+		return ""
+	}
+
+	rest := strings.TrimPrefix(text, prefix)
+	line, _, _ := strings.Cut(rest, "\n")
+	return strings.TrimSpace(line)
+}
+
+func rewriteComplaintBeltLine(text, beltName string) (string, bool) {
+	lines := strings.Split(text, "\n")
+	for i, line := range lines {
+		if strings.Contains(line, " Belt: ") {
+			lines[i] = fmt.Sprintf("%s Belt: %s", belt.StyleFor(beltName).Emoji, belt.DisplayName(beltName))
+			return strings.Join(lines, "\n"), true
+		}
+	}
+
+	return text, false
+}
+
+func htmlEscape(value string) string {
+	replacer := strings.NewReplacer(
+		"&", "&amp;",
+		"<", "&lt;",
+		">", "&gt;",
+	)
+	return replacer.Replace(value)
 }
