@@ -18,6 +18,8 @@ import (
 	"fmt"
 	"log"
 	"os"
+	"sort"
+	"strings"
 	"sync"
 	"time"
 
@@ -85,12 +87,22 @@ func New() *Storage {
 	importTime := time.Now()
 	_ = importTime // for time package use
 
-	// Configure connection pooling
-	db.SetMaxOpenConns(25)
-	db.SetMaxIdleConns(25)
+	// SQLite is a single-file database, so multiple writer connections can easily
+	// trip "database is locked" under concurrent message processing. Keep one
+	// shared connection and let busy_timeout wait briefly for transient locks.
+	db.SetMaxOpenConns(1)
+	db.SetMaxIdleConns(1)
 	db.SetConnMaxLifetime(5 * time.Minute)
 
 	s.db = db
+
+	if _, err := db.Exec(`
+		PRAGMA journal_mode = WAL;
+		PRAGMA busy_timeout = 5000;
+		PRAGMA synchronous = NORMAL;
+	`); err != nil {
+		log.Fatalf("❌ Failed to configure SQLite pragmas: %v", err)
+	}
 
 	// Create table if not exists
 	_, err = db.Exec(`
@@ -109,6 +121,11 @@ func New() *Storage {
 			original_text TEXT,
 			prompt_message_id INTEGER,
 			created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+		);
+		CREATE TABLE IF NOT EXISTS app_state (
+			key TEXT PRIMARY KEY,
+			value TEXT,
+			updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
 		);
 	`)
 	if err != nil {
@@ -390,6 +407,38 @@ func (s *Storage) GetAllSeenComplaints() []string {
 	return complaints
 }
 
+// GetPendingCountsByBelt returns the current active complaint count per belt.
+func (s *Storage) GetPendingCountsByBelt() map[string]int {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	counts := make(map[string]int)
+	for complaintID := range s.seen {
+		beltName := strings.TrimSpace(s.belts[complaintID])
+		counts[beltName]++
+	}
+
+	return counts
+}
+
+// GetPendingComplaints returns complaint IDs grouped by belt.
+func (s *Storage) GetPendingComplaints() map[string][]string {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	grouped := make(map[string][]string)
+	for complaintID := range s.seen {
+		beltName := strings.TrimSpace(s.belts[complaintID])
+		grouped[beltName] = append(grouped[beltName], complaintID)
+	}
+
+	for beltName := range grouped {
+		sort.Strings(grouped[beltName])
+	}
+
+	return grouped
+}
+
 // SaveMultiple atomically inserts NEW records into SQLite and updates memory.
 // Existing records are left untouched in the DB (INSERT OR IGNORE) to preserve
 // wa_message_id and other previously saved values.
@@ -570,6 +619,36 @@ func (s *Storage) RemovePendingResolution(userID int64) {
 	if err != nil {
 		log.Printf("⚠️  Failed to delete pending resolution for user %d: %v", userID, err)
 	}
+}
+
+// GetAppState fetches a persisted app-level setting.
+func (s *Storage) GetAppState(key string) (string, bool) {
+	var value string
+	err := s.db.QueryRow(`SELECT value FROM app_state WHERE key = ?`, key).Scan(&value)
+	if err == sql.ErrNoRows {
+		return "", false
+	}
+	if err != nil {
+		log.Printf("⚠️  Failed to read app state %s: %v", key, err)
+		return "", false
+	}
+	return value, true
+}
+
+// SetAppState stores a persisted app-level setting.
+func (s *Storage) SetAppState(key, value string) error {
+	_, err := s.db.Exec(`
+		INSERT INTO app_state (key, value, updated_at)
+		VALUES (?, ?, CURRENT_TIMESTAMP)
+		ON CONFLICT(key) DO UPDATE SET
+			value = excluded.value,
+			updated_at = CURRENT_TIMESTAMP
+	`, key, value)
+	if err != nil {
+		log.Printf("⚠️  Failed to save app state %s: %v", key, err)
+		return err
+	}
+	return nil
 }
 
 // Close gracefully closes the SQLite database connection.
