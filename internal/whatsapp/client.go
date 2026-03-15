@@ -29,6 +29,7 @@ import (
 	"os/exec"
 	"strings"
 
+	"cmon/internal/belt"
 	_ "modernc.org/sqlite"
 
 	"cmon/internal/session"
@@ -497,11 +498,7 @@ func buildTextSummary(complaints []summaryComplaint) string {
 	var b bytes.Buffer
 	b.WriteString(fmt.Sprintf("📋 *%d Pending Complaints*\n\n", len(complaints)))
 	for i, c := range complaints {
-		belt := c.Belt
-		if strings.TrimSpace(belt) == "" {
-			belt = "Unknown"
-		}
-		b.WriteString(fmt.Sprintf("%d. #%s — %s\n   🏷️ %s\n   📍 %s\n", i+1, c.ComplainNo, c.Name, belt, c.Address))
+		b.WriteString(fmt.Sprintf("%d. #%s — %s\n   %s\n   📍 %s\n", i+1, c.ComplainNo, c.Name, belt.MessageLabel(c.Belt), c.Address))
 	}
 	return b.String()
 }

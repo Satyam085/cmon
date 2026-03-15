@@ -293,7 +293,7 @@ func buildWhatsAppMessage(details Details, gujaratiText string) string {
 
 	msg := fmt.Sprintf(
 		"📋 Complaint: %s\n\n"+
-			"🏷️ Belt: %s\n"+
+			"%s Belt: %s\n"+
 			"👤 %s\n"+
 			"📞 %s\n"+
 			"🆔 Consumer: %s\n"+
@@ -301,7 +301,8 @@ func buildWhatsAppMessage(details Details, gujaratiText string) string {
 			"💬 Details:\n%s\n"+
 			"📍 %s, %s",
 		str(details.ComplainNo),
-		displayBelt(details.Belt),
+		belt.StyleFor(details.Belt).Emoji,
+		belt.DisplayName(details.Belt),
 		str(details.ComplainantName),
 		str(details.MobileNo),
 		str(details.ConsumerNo),
@@ -318,11 +319,8 @@ func buildWhatsAppMessage(details Details, gujaratiText string) string {
 	return msg
 }
 
-func displayBelt(belt string) string {
-	if strings.TrimSpace(belt) == "" {
-		return "Unknown"
-	}
-	return belt
+func displayBelt(name string) string {
+	return belt.MessageLabel(name)
 }
 
 // onclickRe matches the API ID from onclick="openModelData(12345)"

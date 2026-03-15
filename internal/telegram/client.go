@@ -30,6 +30,7 @@ import (
 	"time"
 
 	"cmon/internal/api"
+	"cmon/internal/belt"
 	"cmon/internal/session"
 	"cmon/internal/storage"
 	"cmon/internal/summary"
@@ -303,7 +304,7 @@ func (c *Client) SendComplaintMessage(complaintJSON string, complaintNumber stri
 	// Format message with emojis and structure
 	message := fmt.Sprintf(
 		"📋 Complaint : %s\n\n"+
-			"🏷️ Belt: %s\n"+
+			"%s Belt: %s\n"+
 			"👤 %s\n"+
 			"📞 %s\n"+
 			"🆔 Consumer: %s\n"+
@@ -311,7 +312,8 @@ func (c *Client) SendComplaintMessage(complaintJSON string, complaintNumber stri
 			"💬 <b>Details:</b>\n%s\n"+
 			"📍 %s, %s",
 		getValue("complain_no"),
-		defaultIfEmpty(getValue("belt"), "Unknown"),
+		belt.StyleFor(getValue("belt")).Emoji,
+		belt.DisplayName(getValue("belt")),
 		getValue("complainant_name"),
 		getValue("mobile_no"),
 		getValue("consumer_no"),

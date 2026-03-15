@@ -14,6 +14,8 @@ import (
 	"time"
 	"unicode/utf8"
 
+	"cmon/internal/belt"
+
 	"github.com/fogleman/gg"
 )
 
@@ -402,13 +404,8 @@ func truncate(s string, maxLen int) string {
 	return s
 }
 
-func drawBeltCell(dc *gg.Context, x, y, width, height float64, belt string) {
-	label := belt
-	if strings.TrimSpace(label) == "" {
-		label = "Unknown"
-	}
-
-	fill, text := beltColors(label)
+func drawBeltCell(dc *gg.Context, x, y, width, height float64, beltName string) {
+	style := belt.StyleFor(beltName)
 	padX := 16.0
 	padY := 12.0
 	pillW := width - cellPaddingX*2
@@ -422,33 +419,20 @@ func drawBeltCell(dc *gg.Context, x, y, width, height float64, belt string) {
 	py := y + (height-pillH)/2
 	px := x + cellPaddingX
 
-	dc.SetColor(fill)
+	dc.SetColor(style.Fill)
 	dc.DrawRoundedRectangle(px, py, pillW, pillH, 14)
 	dc.Fill()
 
-	dc.SetColor(text)
-	dc.DrawStringAnchored(label, px+pillW/2, py+pillH/2+1, 0.5, 0.5)
-}
+	circleR := 8.0
+	circleX := px + 20
+	circleY := py + pillH/2
 
-func beltColors(belt string) (color.Color, color.Color) {
-	switch strings.ToLower(strings.TrimSpace(belt)) {
-	case "buhari":
-		return color.RGBA{R: 220, G: 252, B: 231, A: 255}, color.RGBA{R: 22, G: 101, B: 52, A: 255}
-	case "rupvada":
-		return color.RGBA{R: 219, G: 234, B: 254, A: 255}, color.RGBA{R: 30, G: 64, B: 175, A: 255}
-	case "bhimpor":
-		return color.RGBA{R: 254, G: 240, B: 138, A: 255}, color.RGBA{R: 133, G: 77, B: 14, A: 255}
-	case "shiker":
-		return color.RGBA{R: 233, G: 213, B: 255, A: 255}, color.RGBA{R: 107, G: 33, B: 168, A: 255}
-	case "bajipura":
-		return color.RGBA{R: 254, G: 215, B: 170, A: 255}, color.RGBA{R: 154, G: 52, B: 18, A: 255}
-	case "kelkui":
-		return color.RGBA{R: 204, G: 251, B: 241, A: 255}, color.RGBA{R: 17, G: 94, B: 89, A: 255}
-	case "valod (t)":
-		return color.RGBA{R: 254, G: 226, B: 226, A: 255}, color.RGBA{R: 153, G: 27, B: 27, A: 255}
-	default:
-		return color.RGBA{R: 226, G: 232, B: 240, A: 255}, color.RGBA{R: 51, G: 65, B: 85, A: 255}
-	}
+	dc.SetColor(style.Text)
+	dc.DrawCircle(circleX, circleY, circleR)
+	dc.Fill()
+
+	dc.SetColor(style.Text)
+	dc.DrawStringAnchored(style.Label, circleX+circleR+12, py+pillH/2+1, 0, 0.5)
 }
 
 func groupComplaints(complaints []Complaint) []complaintGroup {
@@ -531,9 +515,9 @@ func parseComplaintDate(value string) (time.Time, bool) {
 	return time.Time{}, false
 }
 
-func drawGroupHeader(dc *gg.Context, boldFont string, x, y, width float64, belt string, count int) {
-	fill, text := beltColors(belt)
-	dc.SetColor(fill)
+func drawGroupHeader(dc *gg.Context, boldFont string, x, y, width float64, beltName string, count int) {
+	style := belt.StyleFor(beltName)
+	dc.SetColor(style.Fill)
 	dc.DrawRectangle(x, y, width, float64(groupHeaderH))
 	dc.Fill()
 
@@ -543,7 +527,14 @@ func drawGroupHeader(dc *gg.Context, boldFont string, x, y, width float64, belt 
 	dc.Stroke()
 
 	dc.LoadFontFace(boldFont, headerFontSz-2)
-	dc.SetColor(text)
-	label := fmt.Sprintf("%s Belt  •  %d complaints", belt, count)
-	dc.DrawString(label, x+cellPaddingX, y+float64(groupHeaderH)/2+10)
+	circleX := x + cellPaddingX + 10
+	circleY := y + float64(groupHeaderH)/2
+
+	dc.SetColor(style.Text)
+	dc.DrawCircle(circleX, circleY, 8)
+	dc.Fill()
+
+	dc.SetColor(style.Text)
+	label := fmt.Sprintf("%s Belt  •  %d complaints", style.Label, count)
+	dc.DrawString(label, circleX+20, y+float64(groupHeaderH)/2+10)
 }
