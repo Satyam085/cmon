@@ -135,12 +135,36 @@ func scoreEntry(normVillage string, segments []segment) int {
 
 	best := 0
 	for _, seg := range segments {
+		// Skip this segment if no word in it starts with the same letter as
+		// the village's first letter. This anchors fuzzy matching on the
+		// assumption that the caller always gets the first letter right,
+		// cutting out false Levenshtein matches from unrelated villages.
+		if !segmentSharesFirstLetter(normVillage, seg.value) {
+			continue
+		}
 		score := similarityScore(normVillage, seg.value) + seg.weight
 		if score > best {
 			best = score
 		}
 	}
 	return best
+}
+
+// segmentSharesFirstLetter reports whether any word in seg starts with the
+// same rune as the first rune of village. Both inputs are already normalized
+// (lower-case, trimmed).
+func segmentSharesFirstLetter(village, seg string) bool {
+	if village == "" || seg == "" {
+		return false
+	}
+	vFirst := []rune(village)[0]
+	for _, word := range strings.Fields(seg) {
+		runes := []rune(word)
+		if len(runes) > 0 && runes[0] == vFirst {
+			return true
+		}
+	}
+	return false
 }
 
 func similarityScore(village, segment string) int {
