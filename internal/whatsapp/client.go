@@ -28,11 +28,13 @@ import (
 	"os"
 	"os/exec"
 	"strings"
+	"time"
 
 	"cmon/internal/belt"
 	_ "modernc.org/sqlite"
 
 	"cmon/internal/session"
+	"cmon/internal/telegram"
 
 	"go.mau.fi/whatsmeow"
 	"go.mau.fi/whatsmeow/proto/waCommon"
@@ -248,7 +250,7 @@ func (c *Client) sendImage(imgBytes []byte, caption string) error {
 //   - browserCtxHolder: Provides browser context for API calls and summary fetch
 //   - stor:           Storage for complaint data
 //   - resolveEnabled: Whether reply-to-resolve is active
-func (c *Client) HandleEvents(ctx context.Context, sc *session.Client, stor interface{}, resolveEnabled bool, debugMode bool) {
+func (c *Client) HandleEvents(ctx context.Context, sc *session.Client, stor interface{}, tg *telegram.Client, resolveEnabled bool, debugMode bool) {
 	if c == nil {
 		return
 	}
@@ -336,7 +338,7 @@ func (c *Client) HandleEvents(ctx context.Context, sc *session.Client, stor inte
 			}
 
 			log.Printf("📝 WhatsApp resolve request for complaint %s (remark: %s)", complaintNumber, remark)
-			go c.handleResolve(sc, storRslv, complaintNumber, quotedID, remark, debugMode)
+			go c.handleResolve(sc, storRslv, tg, complaintNumber, quotedID, remark, debugMode)
 		}
 	})
 
@@ -384,7 +386,7 @@ func (c *Client) handleSummaryCommand(sc *session.Client, storI interface{}) {
 }
 
 // handleResolve resolves a complaint via the DGVCL API and updates tracking.
-func (c *Client) handleResolve(sc *session.Client, stor resolveStorage, complaintNumber, waMessageID, remark string, debugMode bool) {
+func (c *Client) handleResolve(sc *session.Client, stor resolveStorage, tg *telegram.Client, complaintNumber, waMessageID, remark string, debugMode bool) {
 	// Look up API ID
 	apiID := stor.GetAPIID(complaintNumber)
 	if apiID == "" {
@@ -405,8 +407,30 @@ func (c *Client) handleResolve(sc *session.Client, stor resolveStorage, complain
 		return
 	}
 
-	// Remove from storage so the automatic markResolvedComplaints loop doesn't
-	// attempt to double-resolve or edit a stale Telegram message.
+	messageID := stor.GetMessageID(complaintNumber)
+	if messageID != "" && tg != nil {
+		consumerName := stor.GetConsumerName(complaintNumber)
+		if consumerName == "" {
+			consumerName = "Unknown"
+		}
+
+		resolvedMessage := fmt.Sprintf(
+			"✅ <b>RESOLVED</b>\n\n"+
+				"Complaint #%s\n"+
+				"👤 %s\n"+
+				"🕐 %s",
+			complaintNumber,
+			consumerName,
+			time.Now().Format("02 Jan 2006, 03:04 PM"),
+		)
+
+		if err := tg.EditMessageText(tg.ChatID, messageID, resolvedMessage); err != nil {
+			log.Printf("⚠️  WhatsApp resolved %s on website but failed to edit Telegram message: %v", complaintNumber, err)
+		}
+	}
+
+	// Remove from storage after cross-channel notifications are updated so the
+	// periodic resolved checker does not skip the Telegram edit.
 	if err := stor.Remove(complaintNumber); err != nil {
 		log.Printf("⚠️  Resolved on website but failed to remove %s from storage: %v", complaintNumber, err)
 	}
@@ -464,6 +488,8 @@ type summaryStorage interface {
 type resolveStorage interface {
 	GetAPIID(complaintNumber string) string
 	GetComplaintIDByWAMessageID(waMessageID string) (string, bool)
+	GetConsumerName(complaintNumber string) string
+	GetMessageID(complaintNumber string) string
 	Exists(complaintNumber string) bool
 	Remove(complaintNumber string) error
 }

@@ -60,7 +60,6 @@ func main() {
 		log.Fatal("❌ Configuration error:", err)
 	}
 
-
 	// Initialize storage
 	stor := storage.New()
 	defer func() {
@@ -111,7 +110,7 @@ func main() {
 	if wa != nil {
 		waCtx, waCancel := context.WithCancel(context.Background())
 		defer waCancel()
-		go wa.HandleEvents(waCtx, sc, stor, cfg.WhatsAppResolveEnabled, cfg.DebugMode)
+		go wa.HandleEvents(waCtx, sc, stor, tg, cfg.WhatsAppResolveEnabled, cfg.DebugMode)
 	}
 
 	log.Println("🔐 Logging in...")
