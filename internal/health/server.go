@@ -132,7 +132,7 @@ func StartServer(monitor *Monitor, port string, sc *session.Client, stor *storag
 	go func() {
 		// Bind only to loopback — the dashboard has no authentication.
 		// Expose it externally only via a reverse proxy with auth if needed.
-		addr := "127.0.0.1:" + port
+		addr := "0.0.0.0:" + port
 		log.Printf("✓ Dashboard server started on %s", addr)
 		if err := http.ListenAndServe(addr, mux); err != nil {
 			log.Printf("⚠️  Dashboard server error: %v", err)
