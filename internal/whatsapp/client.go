@@ -274,7 +274,7 @@ func (c *Client) HandleEvents(ctx context.Context, sc *session.Client, stor inte
 			return
 		}
 
-			// Accept messages from the configured recipient chat.
+		// Accept messages from the configured recipient chat.
 		// NOTE: Modern WhatsApp uses LIDs (Linked IDs) as JIDs, which don't
 		// match the phone-based JID in WHATSAPP_RECIPIENT_JID. We accept from
 		// any chat and rely on command specificity (/summary, resolve) for safety.
@@ -307,8 +307,15 @@ func (c *Client) HandleEvents(ctx context.Context, sc *session.Client, stor inte
 				return
 			}
 
+			ext := msg.Message.GetExtendedTextMessage()
+			if ext == nil {
+				c.SendMessage("⚠️ To resolve a complaint, *reply to the complaint message* with:\nresolve <your remark here>")
+				return
+			}
+
 			// Get the ID of the message being replied to (quoted message stanza ID)
-			quotedID := msg.Message.GetExtendedTextMessage().GetContextInfo().GetStanzaID()
+			contextInfo := ext.GetContextInfo()
+			quotedID := contextInfo.GetStanzaID()
 			if quotedID == "" {
 				c.SendMessage("⚠️ To resolve a complaint, *reply to the complaint message* with:\nresolve <your remark here>")
 				return
@@ -322,8 +329,13 @@ func (c *Client) HandleEvents(ctx context.Context, sc *session.Client, stor inte
 
 			complaintNumber, tracked := storRslv.GetComplaintIDByWAMessageID(quotedID)
 			if !tracked {
-				c.SendMessage("⚠️ That message is not a tracked complaint, or it was already resolved.")
-				return
+				complaintNumber = extractComplaintNumberFromQuotedMessage(contextInfo.GetQuotedMessage())
+				if complaintNumber == "" || !storRslv.Exists(complaintNumber) {
+					c.SendMessage("⚠️ That message is not a tracked complaint, or it was already resolved.")
+					return
+				}
+
+				log.Printf("⚠️  WhatsApp reply lookup missed stanza %q; recovered complaint %s from quoted message text", quotedID, complaintNumber)
 			}
 
 			log.Printf("📝 WhatsApp resolve request for complaint %s (remark: %s)", complaintNumber, remark)
@@ -506,6 +518,47 @@ func defaultRenderSummaryImage(complaints []summaryComplaint) ([]byte, error) {
 
 func defaultResolveComplaintAPI(sc *session.Client, apiID, remark string, debugMode bool) error {
 	return resolveOnWebsite(sc, apiID, remark, debugMode)
+}
+
+func extractComplaintNumberFromQuotedMessage(msg *waProto.Message) string {
+	if msg == nil {
+		return ""
+	}
+
+	candidates := []string{
+		msg.GetConversation(),
+		msg.GetExtendedTextMessage().GetText(),
+		msg.GetImageMessage().GetCaption(),
+		msg.GetDocumentMessage().GetCaption(),
+		msg.GetVideoMessage().GetCaption(),
+	}
+
+	for _, text := range candidates {
+		if complaintNumber := extractComplaintNumberFromText(text); complaintNumber != "" {
+			return complaintNumber
+		}
+	}
+
+	return ""
+}
+
+func extractComplaintNumberFromText(text string) string {
+	text = strings.TrimSpace(text)
+	if text == "" {
+		return ""
+	}
+
+	const prefix = "📋 Complaint:"
+	for _, line := range strings.Split(text, "\n") {
+		line = strings.TrimSpace(line)
+		if !strings.HasPrefix(line, prefix) {
+			continue
+		}
+
+		return strings.TrimSpace(strings.TrimPrefix(line, prefix))
+	}
+
+	return ""
 }
 
 // buildTextSummary produces a plain-text fallback when image sending fails.
