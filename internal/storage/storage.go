@@ -298,6 +298,13 @@ func (s *Storage) GetMessageID(complaintID string) string {
 	return s.messageIDs[complaintID]
 }
 
+// GetWAMessageID retrieves the WhatsApp message ID for a complaint.
+func (s *Storage) GetWAMessageID(complaintID string) string {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.waMessageIDs[complaintID]
+}
+
 // SetMessageID updates both memory and DB with a new Telegram message ID.
 func (s *Storage) SetMessageID(complaintID, messageID string) error {
 	s.mu.Lock()

@@ -8,11 +8,13 @@
 package health
 
 import (
-	"encoding/json"
 	"log"
 	"net/http"
 	"sync"
 	"time"
+
+	"cmon/internal/session"
+	"cmon/internal/storage"
 )
 
 // Status represents the application health status.
@@ -110,46 +112,30 @@ func (m *Monitor) GetStatus() Status {
 	}
 }
 
-// StartServer starts the health check HTTP server.
+// StartServer starts the local CMON dashboard server.
 //
 // Endpoints:
-//   - GET /health: Returns JSON health status
+//   - GET /: Returns the pending complaints dashboard
+//   - GET /data: Returns dashboard JSON data
 //
 // Server runs in background goroutine and doesn't block.
-//
-// Example response:
-//   {
-//     "status": "healthy",
-//     "uptime": "1h2m3s",
-//     "last_fetch_time": "2026-01-15 10:30:00",
-//     "last_fetch_status": "success"
-//   }
 //
 // Parameters:
 //   - monitor: Health monitor to query for status
 //   - port: Port to listen on (e.g., "8080")
-func StartServer(monitor *Monitor, port string) {
+//   - sc: Authenticated session client used by the complaints dashboard
+//   - stor: Complaint storage used by the complaints dashboard
+func StartServer(monitor *Monitor, port string, sc *session.Client, stor *storage.Storage) {
 	mux := http.NewServeMux()
-	mux.HandleFunc("/health", func(w http.ResponseWriter, r *http.Request) {
-		status := monitor.GetStatus()
-
-		w.Header().Set("Content-Type", "application/json")
-		// Return 503 when unhealthy so uptime monitors detect failures automatically.
-		if status.Status != "healthy" {
-			w.WriteHeader(http.StatusServiceUnavailable)
-		} else {
-			w.WriteHeader(http.StatusOK)
-		}
-		json.NewEncoder(w).Encode(status)
-	})
+	registerComplaintDashboard(mux, monitor, sc, stor)
 
 	go func() {
-		// Bind only to loopback — the health endpoint has no authentication.
+		// Bind only to loopback — the dashboard has no authentication.
 		// Expose it externally only via a reverse proxy with auth if needed.
 		addr := "127.0.0.1:" + port
-		log.Printf("✓ Health check server started on %s", addr)
+		log.Printf("✓ Dashboard server started on %s", addr)
 		if err := http.ListenAndServe(addr, mux); err != nil {
-			log.Printf("⚠️  Health check server error: %v", err)
+			log.Printf("⚠️  Dashboard server error: %v", err)
 		}
 	}()
 }

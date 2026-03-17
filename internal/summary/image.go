@@ -21,16 +21,18 @@ import (
 
 // Complaint holds the fields displayed in the summary table.
 type Complaint struct {
-	ComplainNo   string
-	Name         string
-	ConsumerNo   string
-	MobileNo     string
-	Address      string
-	Area         string
-	Village      string
-	Belt         string
-	Description  string
-	ComplainDate string
+	ComplainNo        string `json:"complain_no"`
+	Name              string `json:"name"`
+	ConsumerNo        string `json:"consumer_no"`
+	MobileNo          string `json:"mobile_no"`
+	Address           string `json:"address"`
+	Area              string `json:"area"`
+	Village           string `json:"village"`
+	Belt              string `json:"belt"`
+	Description       string `json:"description"`
+	ComplainDate      string `json:"complain_date"`
+	TelegramMessageID string `json:"telegram_message_id"`
+	WhatsAppMessageID string `json:"whatsapp_message_id"`
 }
 
 // Table styling constants — rendered at 2x scale for Telegram clarity

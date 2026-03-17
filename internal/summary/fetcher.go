@@ -123,16 +123,18 @@ func fetchComplaintDetail(sc *session.Client, stor *storage.Storage, apiID, comp
 	}
 
 	return &Complaint{
-		ComplainNo:   safeStr(detail["complain_no"]),
-		Name:         safeStr(detail["complainant_name"]),
-		ConsumerNo:   safeStr(detail["consumer_no"]),
-		MobileNo:     safeStr(detail["mobile_no"]),
-		Address:      safeStr(detail["exact_location"]),
-		Area:         safeStr(detail["area"]),
-		Village:      stor.GetVillage(complaintNumber),
-		Belt:         stor.GetBelt(complaintNumber),
-		Description:  safeStr(detail["description"]),
-		ComplainDate: safeStr(detail["complain_date"]),
+		ComplainNo:        safeStr(detail["complain_no"]),
+		Name:              safeStr(detail["complainant_name"]),
+		ConsumerNo:        safeStr(detail["consumer_no"]),
+		MobileNo:          safeStr(detail["mobile_no"]),
+		Address:           safeStr(detail["exact_location"]),
+		Area:              safeStr(detail["area"]),
+		Village:           stor.GetVillage(complaintNumber),
+		Belt:              stor.GetBelt(complaintNumber),
+		Description:       safeStr(detail["description"]),
+		ComplainDate:      safeStr(detail["complain_date"]),
+		TelegramMessageID: stor.GetMessageID(complaintNumber),
+		WhatsAppMessageID: stor.GetWAMessageID(complaintNumber),
 	}, nil
 }
 

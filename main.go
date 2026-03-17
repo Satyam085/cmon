@@ -89,15 +89,15 @@ func main() {
 	// Step 4: Initialize health monitor
 	healthMonitor := health.NewMonitor()
 
-	// Step 5: Start health check server in background
-	health.StartServer(healthMonitor, cfg.HealthCheckPort)
-
-	// Step 6: Create authenticated session client (replaces browser context)
+	// Step 5: Create authenticated session client (replaces browser context)
 	sc, err := session.New()
 	if err != nil {
 		log.Fatal("❌ Failed to create session client:", err)
 	}
 	log.Println("✓ Session client created")
+
+	// Step 6: Start health check server in background
+	health.StartServer(healthMonitor, cfg.HealthCheckPort, sc, stor)
 
 	// Step 7: Start Telegram callback handler if configured
 	if tg != nil {
