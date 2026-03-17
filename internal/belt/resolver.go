@@ -19,6 +19,7 @@ var entries = []Entry{
 	{Village: "Bhojpur Najik", Belt: "Rupvada"},
 	{Village: "Boriya", Belt: "Shiker"},
 	{Village: "Borkhadi", Belt: "Bajipura"},
+	{Village: "Bajipura", Belt: "Bajipura"},
 	{Village: "Buhari", Belt: "Buhari"},
 	{Village: "Butwada", Belt: "Bajipura"},
 	{Village: "Dadariya", Belt: "Buhari"},
@@ -94,6 +95,10 @@ const (
 //  2. Area is exactly "Valod" -> search loc for another village; fallback to Valod (T).
 //  3. General case -> score area + loc together, Valod excluded entirely.
 func Resolve(area, loc, desc string) Entry {
+	return resolve(area, loc, desc).Entry
+}
+
+func resolve(area, loc, desc string) scoredEntry {
 	normArea := normalize(area)
 
 	// Step 1: strong area match (non-Valod).
@@ -106,56 +111,69 @@ func Resolve(area, loc, desc string) Entry {
 		if match, ok := resolveBest(loc, false); ok {
 			return match
 		}
+		valodScore := bestMatch(buildSegments("", normArea), true).score
 		if hasAG(desc) {
-			return Entry{Village: canonicalValod, Belt: "Shiker"}
+			return scoredEntry{
+				Entry: Entry{Village: canonicalValod, Belt: "Shiker"},
+				score: valodScore,
+			}
 		}
-		return Entry{Village: canonicalValod, Belt: canonicalValodBelt}
+		return scoredEntry{
+			Entry: Entry{Village: canonicalValod, Belt: canonicalValodBelt},
+			score: valodScore,
+		}
 	}
 
-	// Step 3: general case — Valod is excluded completely because it is only
-	// reachable via the explicit area == "Valod" path above.
+	// Step 3: general case — score everything, but still avoid letting Valod
+	// override a real non-Valod village when both are plausible.
 	segments := buildSegments(area, loc)
 	if len(segments) == 0 {
-		return Entry{}
+		return scoredEntry{}
 	}
 
-	best := bestMatch(segments, false)
+	best := bestMatch(segments, true)
+	bestNonValod := bestMatch(segments, false)
 	if best.score < minResolveScore {
-		return Entry{}
+		return scoredEntry{}
+	}
+	if strings.EqualFold(best.Village, canonicalValod) && bestNonValod.score >= minResolveScore && bestNonValod.score >= best.score-20 {
+		best = bestNonValod
 	}
 
 	// AG feeders in the Valod town belt belong to the Shiker belt.
 	if strings.EqualFold(best.Belt, canonicalValodBelt) && hasAG(desc) {
-		return Entry{Village: best.Village, Belt: "Shiker"}
+		return scoredEntry{
+			Entry: Entry{Village: best.Village, Belt: "Shiker"},
+			score: best.score,
+		}
 	}
 
-	return best.Entry
+	return best
 }
 
 // resolveStrongArea returns a match when the area field alone scores >= strongAreaScore
-// against a non-Valod village. The area string is passed in the area slot of
-// buildSegments (weight 0) so the score is purely similarity-based.
-func resolveStrongArea(normArea string) (Entry, bool) {
+// against a non-Valod village. The area text is scored with loc-like weight so
+// village mentions embedded inside larger area strings still surface strongly.
+func resolveStrongArea(normArea string) (scoredEntry, bool) {
 	if normArea == "" || normArea == normalize(canonicalValod) {
-		return Entry{}, false
+		return scoredEntry{}, false
 	}
 
-	// area goes in the area slot (weight 0), not the loc slot (weight 16).
-	best := bestMatch(buildSegments(normArea, ""), false)
+	best := bestMatch(buildSegments("", normArea), false)
 	if best.score < strongAreaScore {
-		return Entry{}, false
+		return scoredEntry{}, false
 	}
-	return best.Entry, true
+	return best, true
 }
 
 // resolveBest searches a single text string and returns the best match
 // above minResolveScore.
-func resolveBest(text string, includeValod bool) (Entry, bool) {
+func resolveBest(text string, includeValod bool) (scoredEntry, bool) {
 	best := bestMatch(buildSegments("", text), includeValod)
 	if best.score < minResolveScore {
-		return Entry{}, false
+		return scoredEntry{}, false
 	}
-	return best.Entry, true
+	return best, true
 }
 
 // bestMatch returns the highest-scoring entry from normalizedEntries.
