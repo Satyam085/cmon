@@ -58,12 +58,11 @@ var entries = []Entry{
 
 type scoredEntry struct {
 	Entry
-	normVillage string // pre-normalized village name for scoring
+	normVillage string
 	score       int
 }
 
-// normalizedEntries pre-computes the normalized village name for each entry
-// so that normalize() is not called on every Resolve invocation.
+// normalizedEntries pre-computes the normalized village name for each entry.
 var normalizedEntries = func() []scoredEntry {
 	out := make([]scoredEntry, 0, len(entries))
 	for _, e := range entries {
@@ -80,52 +79,121 @@ type segment struct {
 	weight int
 }
 
+const (
+	minResolveScore    = 72
+	strongAreaScore    = 88
+	canonicalValod     = "Valod"
+	canonicalValodBelt = "Valod (T)"
+)
+
 // Resolve returns the best village and belt match using the complaint area,
 // location, and description.
 //
-// Valod is treated as a last resort: if any other village clears the minimum
-// score threshold (72), it is preferred over Valod regardless of the score gap.
-// This prevents ambiguous area/location strings that partially match "Valod"
-// from overriding a real village match.
+// Resolution order:
+//  1. Area strongly matches a non-Valod village (score >= 88) -> use that village.
+//  2. Area is exactly "Valod" -> search loc for another village; fallback to Valod (T).
+//  3. General case -> score area + loc together, Valod excluded entirely.
 func Resolve(area, loc, desc string) Entry {
+	normArea := normalize(area)
+
+	// Step 1: strong area match (non-Valod).
+	if match, ok := resolveStrongArea(normArea); ok {
+		return match
+	}
+
+	// Step 2: area is explicitly Valod.
+	if normArea == normalize(canonicalValod) {
+		if match, ok := resolveBest(loc, false); ok {
+			return match
+		}
+		if hasAG(desc) {
+			return Entry{Village: canonicalValod, Belt: "Shiker"}
+		}
+		return Entry{Village: canonicalValod, Belt: canonicalValodBelt}
+	}
+
+	// Step 3: general case — Valod is excluded completely because it is only
+	// reachable via the explicit area == "Valod" path above.
 	segments := buildSegments(area, loc)
 	if len(segments) == 0 {
 		return Entry{}
 	}
 
-	best := scoredEntry{}
-	bestNonValod := scoredEntry{}
-
-	for _, entry := range normalizedEntries {
-		score := scoreEntry(entry.normVillage, segments)
-		if score > best.score {
-			best = scoredEntry{Entry: entry.Entry, normVillage: entry.normVillage, score: score}
-		}
-		// Track the best non-Valod match independently so that even if Valod
-		// happens to score highest, we can fall back to the real best match.
-		if !strings.EqualFold(entry.Village, "Valod") && score > bestNonValod.score {
-			bestNonValod = scoredEntry{Entry: entry.Entry, normVillage: entry.normVillage, score: score}
-		}
-	}
-
-	if best.score < 72 {
+	best := bestMatch(segments, false)
+	if best.score < minResolveScore {
 		return Entry{}
 	}
 
-	// If Valod is the top scorer but another village is both above the minimum
-	// threshold and reasonably close, prefer that village instead. This keeps
-	// obvious Valod matches from being overridden by weak fuzzy matches.
-	if strings.EqualFold(best.Village, "Valod") && bestNonValod.score >= 72 && bestNonValod.score >= best.score-20 {
-		best = bestNonValod
-	}
-
-	// AG (Agriculture) feeders in the Valod town belt actually belong to the
-	// Shiker belt. Override the belt when the description signals AG.
-	if strings.EqualFold(best.Belt, "Valod (T)") && hasAG(desc) {
+	// AG feeders in the Valod town belt belong to the Shiker belt.
+	if strings.EqualFold(best.Belt, canonicalValodBelt) && hasAG(desc) {
 		return Entry{Village: best.Village, Belt: "Shiker"}
 	}
 
 	return best.Entry
+}
+
+// resolveStrongArea returns a match when the area field alone scores >= strongAreaScore
+// against a non-Valod village. The area string is passed in the area slot of
+// buildSegments (weight 0) so the score is purely similarity-based.
+func resolveStrongArea(normArea string) (Entry, bool) {
+	if normArea == "" || normArea == normalize(canonicalValod) {
+		return Entry{}, false
+	}
+
+	// area goes in the area slot (weight 0), not the loc slot (weight 16).
+	best := bestMatch(buildSegments(normArea, ""), false)
+	if best.score < strongAreaScore {
+		return Entry{}, false
+	}
+	return best.Entry, true
+}
+
+// resolveBest searches a single text string and returns the best match
+// above minResolveScore.
+func resolveBest(text string, includeValod bool) (Entry, bool) {
+	best := bestMatch(buildSegments("", text), includeValod)
+	if best.score < minResolveScore {
+		return Entry{}, false
+	}
+	return best.Entry, true
+}
+
+// bestMatch returns the highest-scoring entry from normalizedEntries.
+//
+// Optimisation: since the first letter of the village name is guaranteed to be
+// correct in the input, we pre-compute the set of first letters present across
+// all segment words and hard-skip any entry whose village starts with a
+// different letter — avoiding Levenshtein calls for obviously unrelated villages.
+func bestMatch(segments []segment, includeValod bool) scoredEntry {
+	// Collect every first letter present in the segments.
+	firstLetters := make(map[rune]bool)
+	for _, seg := range segments {
+		for _, word := range strings.Fields(seg.value) {
+			runes := []rune(word)
+			if len(runes) > 0 {
+				firstLetters[runes[0]] = true
+			}
+		}
+	}
+
+	best := scoredEntry{}
+	for _, entry := range normalizedEntries {
+		if !includeValod && strings.EqualFold(entry.Village, canonicalValod) {
+			continue
+		}
+		// Hard skip: first letter not present anywhere in the input.
+		if len(entry.normVillage) > 0 {
+			vFirst := []rune(entry.normVillage)[0]
+			if !firstLetters[vFirst] {
+				continue
+			}
+		}
+		score := scoreEntry(entry.normVillage, segments)
+		if score > best.score {
+			best = scoredEntry{Entry: entry.Entry, normVillage: entry.normVillage, score: score}
+		}
+	}
+	return best
 }
 
 func scoreEntry(normVillage string, segments []segment) int {
@@ -135,10 +203,8 @@ func scoreEntry(normVillage string, segments []segment) int {
 
 	best := 0
 	for _, seg := range segments {
-		// Skip this segment if no word in it starts with the same letter as
-		// the village's first letter. This anchors fuzzy matching on the
-		// assumption that the caller always gets the first letter right,
-		// cutting out false Levenshtein matches from unrelated villages.
+		// segmentSharesFirstLetter is a secondary guard here;
+		// the primary first-letter gate lives in bestMatch.
 		if !segmentSharesFirstLetter(normVillage, seg.value) {
 			continue
 		}
@@ -151,8 +217,7 @@ func scoreEntry(normVillage string, segments []segment) int {
 }
 
 // segmentSharesFirstLetter reports whether any word in seg starts with the
-// same rune as the first rune of village. Both inputs are already normalized
-// (lower-case, trimmed).
+// same rune as the first rune of village. Both inputs are already normalized.
 func segmentSharesFirstLetter(village, seg string) bool {
 	if village == "" || seg == "" {
 		return false
@@ -187,7 +252,7 @@ func similarityScore(village, segment string) int {
 	if maxLen == 0 {
 		return 0
 	}
-	score := 100 - (dist * 100 / maxLen)
+	score := 100 - (dist*100/maxLen)
 	if score < 0 {
 		return 0
 	}
@@ -195,10 +260,6 @@ func similarityScore(village, segment string) int {
 }
 
 // tokenSubset reports whether every token in village appears in segment.
-// Note: this is intentionally asymmetric — it checks that the village's tokens
-// are a subset of the segment's tokens, not the other way around. This allows
-// multi-word village names like "Pelad Buhari" to match a longer segment that
-// contains both words.
 func tokenSubset(village, segment string) bool {
 	villageTokens := strings.Fields(village)
 	segmentTokens := strings.Fields(segment)
@@ -271,10 +332,8 @@ func addSegment(value string, weight int, seen map[string]bool, segments *[]segm
 	*segments = append(*segments, segment{value: value, weight: weight})
 }
 
-// hasAG reports whether the description contains an "AG" token, which signals
-// an Agriculture feeder. Handles common encodings:
-//   - "AG" or "ag"       → normalized to token "ag"
-//   - "A.G." or "A/G"   → normalized to adjacent tokens "a" "g"
+// hasAG reports whether the description contains an "AG" token (Agriculture feeder).
+// Handles: "AG", "ag", "A.G.", "A/G".
 func hasAG(desc string) bool {
 	desc = normalize(desc)
 	if desc == "" {
@@ -356,8 +415,6 @@ func levenshtein(a, b string) int {
 	return prev[len(br)]
 }
 
-// minInt returns the smallest of the provided integers.
-// Named minInt to avoid shadowing the Go 1.21 builtin min.
 func minInt(vals ...int) int {
 	best := vals[0]
 	for _, v := range vals[1:] {
@@ -368,8 +425,6 @@ func minInt(vals ...int) int {
 	return best
 }
 
-// maxInt returns the larger of two integers.
-// Named maxInt to avoid shadowing the Go 1.21 builtin max.
 func maxInt(a, b int) int {
 	if a > b {
 		return a

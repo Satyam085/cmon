@@ -4,8 +4,8 @@ import "testing"
 
 func TestResolveExactVillage(t *testing.T) {
 	match := Resolve("Buhari", "Near Virpor", "")
-	if match.Belt != "Buhari" || match.Village != "Virpor" {
-		t.Fatalf("expected Virpor/Buhari, got %#v", match)
+	if match.Belt != "Buhari" || match.Village != "Buhari" {
+		t.Fatalf("expected Buhari/Buhari from area-first rule, got %#v", match)
 	}
 }
 
@@ -20,6 +20,13 @@ func TestResolveAvoidsValodTie(t *testing.T) {
 	match := Resolve("Valod", "Vedchi faliya", "")
 	if match.Village != "Vedchhi" || match.Belt != "Rupvada" {
 		t.Fatalf("expected Vedchhi/Rupvada, got %#v", match)
+	}
+}
+
+func TestResolvePrefersNonValodAreaVillage(t *testing.T) {
+	match := Resolve("AT. KANJOD TAL VALOD", "valod bus stand", "")
+	if match.Village != "Kanajod" || match.Belt != "Bhimpor" {
+		t.Fatalf("expected Kanajod/Bhimpor from area-first rule, got %#v", match)
 	}
 }
 
@@ -41,5 +48,12 @@ func TestResolveKeepsStrongValodMatchOverWeakFuzzyMatch(t *testing.T) {
 	match := Resolve("", "valod POOL FALIYA ANAND VIHAR NI SAME, VALOD", "")
 	if match.Village != "Valod" || match.Belt != "Valod (T)" {
 		t.Fatalf("expected Valod/Valod (T), got %#v", match)
+	}
+}
+
+func TestResolveFallsBackToValodWhenLocHasNoOtherVillage(t *testing.T) {
+	match := Resolve("Valod", "bus stand main road", "")
+	if match.Village != "Valod" || match.Belt != "Valod (T)" {
+		t.Fatalf("expected Valod/Valod (T) fallback, got %#v", match)
 	}
 }
