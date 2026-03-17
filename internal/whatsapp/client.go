@@ -274,18 +274,7 @@ func (c *Client) HandleEvents(ctx context.Context, sc *session.Client, stor inte
 			return
 		}
 
-		// Debug: log every incoming message event so issues are visible in logs
-		log.Printf("   [WA] msg from chat=%s isFromMe=%v text=%q", msg.Info.Chat, msg.Info.IsFromMe,
-			func() string {
-				t := msg.Message.GetConversation()
-				if t == "" {
-					t = msg.Message.GetExtendedTextMessage().GetText()
-				}
-				return t
-			}(),
-		)
-
-		// Accept messages from the configured recipient chat.
+			// Accept messages from the configured recipient chat.
 		// NOTE: Modern WhatsApp uses LIDs (Linked IDs) as JIDs, which don't
 		// match the phone-based JID in WHATSAPP_RECIPIENT_JID. We accept from
 		// any chat and rely on command specificity (/summary, resolve) for safety.
