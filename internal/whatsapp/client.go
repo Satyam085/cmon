@@ -409,6 +409,7 @@ func (c *Client) handleResolve(sc *session.Client, stor resolveStorage, tg *tele
 	}
 
 	messageID := stor.GetMessageID(complaintNumber)
+	telegramEditFailed := false
 	if messageID != "" && tg != nil {
 		consumerName := stor.GetConsumerName(complaintNumber)
 		if consumerName == "" {
@@ -427,15 +428,23 @@ func (c *Client) handleResolve(sc *session.Client, stor resolveStorage, tg *tele
 
 		if err := tg.EditMessageText(tg.ChatID, messageID, resolvedMessage); err != nil {
 			log.Printf("⚠️  WhatsApp resolved %s on website but failed to edit Telegram message: %v", complaintNumber, err)
+			telegramEditFailed = true
 		}
+	} else if tg != nil {
+		log.Printf("⚠️  WhatsApp resolved %s on website but no Telegram message ID was stored", complaintNumber)
+		telegramEditFailed = true
 	}
 
 	// Remove from storage after cross-channel notifications are updated so the
-	// periodic resolved checker does not skip the Telegram edit.
+	// periodic resolved checker does not continue to advertise a complaint that
+	// the website has already resolved.
 	if err := stor.Remove(complaintNumber); err != nil {
 		log.Printf("⚠️  Resolved on website but failed to remove %s from storage: %v", complaintNumber, err)
 	}
 
+	if telegramEditFailed {
+		c.SendMessage(fmt.Sprintf("⚠️ Complaint #%s was resolved on the website, but Telegram could not be updated.", complaintNumber))
+	}
 	c.SendMessage(fmt.Sprintf("✅ RESOLVED\n\nComplaint #%s\n💬 %s", complaintNumber, remark))
 	log.Printf("✅ WhatsApp: resolved complaint %s", complaintNumber)
 }

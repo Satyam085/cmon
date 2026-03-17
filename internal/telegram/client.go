@@ -686,6 +686,9 @@ func (c *Client) handleCallbackQuery(ctx context.Context, query *CallbackQuery, 
 
 	// Get message ID for this complaint
 	messageID := stor.GetMessageID(complaintNumber)
+	if messageID == "" && query.Message != nil {
+		messageID = fmt.Sprintf("%d", query.Message.MessageID)
+	}
 	if messageID == "" {
 		log.Println("⚠️  Message ID not found for complaint")
 		c.answerCallbackQuery(query.ID, "Error: Message not found")
@@ -722,12 +725,19 @@ func (c *Client) handleCallbackQuery(ctx context.Context, query *CallbackQuery, 
 		return
 	}
 
-	pr := storage.PendingResolution{
-		ComplaintNumber: complaintNumber,
-		MessageID:       messageID,
-		OriginalText:    originalText,
+	if exists {
+		stor.RemovePendingResolution(query.From.ID)
+		if pending.PromptMessageID > 0 {
+			deleteReq := struct {
+				ChatID    string `json:"chat_id"`
+				MessageID int    `json:"message_id"`
+			}{
+				ChatID:    c.ChatID,
+				MessageID: pending.PromptMessageID,
+			}
+			c.doRequest("deleteMessage", deleteReq)
+		}
 	}
-	_ = stor.AddPendingResolution(query.From.ID, pr)
 
 	log.Printf("📝 Requesting resolution note for complaint %s from %s\n", complaintNumber, query.From.FirstName)
 
@@ -777,10 +787,26 @@ func (c *Client) handleCallbackQuery(ctx context.Context, query *CallbackQuery, 
 		}
 	}
 
-	// Update pending resolution with prompt message ID
-	if pending, exists := stor.GetPendingResolution(query.From.ID); exists {
-		pending.PromptMessageID = promptMsgID
-		_ = stor.AddPendingResolution(query.From.ID, pending)
+	pr := storage.PendingResolution{
+		ComplaintNumber: complaintNumber,
+		MessageID:       messageID,
+		OriginalText:    originalText,
+		PromptMessageID: promptMsgID,
+	}
+	if err := stor.AddPendingResolution(query.From.ID, pr); err != nil {
+		if promptMsgID > 0 {
+			deleteReq := struct {
+				ChatID    string `json:"chat_id"`
+				MessageID int    `json:"message_id"`
+			}{
+				ChatID:    c.ChatID,
+				MessageID: promptMsgID,
+			}
+			c.doRequest("deleteMessage", deleteReq)
+		}
+		c.answerCallbackQuery(query.ID, "Error saving pending resolution")
+		log.Printf("⚠️  Failed to persist pending resolution for %s: %v\n", query.From.FirstName, err)
+		return
 	}
 
 	c.answerCallbackQuery(query.ID, "Please send your remarks")
@@ -920,33 +946,41 @@ func (c *Client) handleMessage(ctx context.Context, sc *session.Client, message 
 		time.Now().Format("02 Jan 2006, 03:04 PM"),
 	)
 
-	// Edit message and remove button
-	req := EditMessageRequest{
-		ChatID:      c.ChatID,
-		MessageID:   pending.MessageID,
-		Text:        resolvedMessage,
-		ParseMode:   "HTML",
-		ReplyMarkup: &InlineKeyboardMarkup{InlineKeyboard: [][]InlineKeyboardButton{}},
-	}
-
-	_, err = c.doRequest("editMessageText", req)
-	if err != nil {
-		log.Printf("⚠️  Failed to edit message: %v\n", err)
-		errorMsg := Message{
-			ChatID:    c.ChatID,
-			Text:      fmt.Sprintf("❌ Error updating Telegram message for complaint %s. The complaint was marked as resolved on the website though.", pending.ComplaintNumber),
-			ParseMode: "HTML",
+	var editErr error
+	if pending.MessageID == "" {
+		editErr = fmt.Errorf("telegram message ID missing")
+	} else {
+		req := EditMessageRequest{
+			ChatID:      c.ChatID,
+			MessageID:   pending.MessageID,
+			Text:        resolvedMessage,
+			ParseMode:   "HTML",
+			ReplyMarkup: &InlineKeyboardMarkup{InlineKeyboard: [][]InlineKeyboardButton{}},
 		}
-		c.doRequest("sendMessage", errorMsg)
-		return
+
+		_, editErr = c.doRequest("editMessageText", req)
+		if editErr != nil {
+			log.Printf("⚠️  Failed to edit message: %v\n", editErr)
+		}
 	}
 
-	// Remove from storage
+	// Remove from storage even if Telegram editing failed. The website resolve
+	// already succeeded, so local state should not continue to advertise it as pending.
 	removed, err := stor.RemoveIfExists(pending.ComplaintNumber)
 	if err != nil {
 		log.Printf("⚠️  Failed to remove from storage: %v\n", err)
 	} else if !removed {
 		log.Printf("ℹ️  Complaint %s was already removed from storage\n", pending.ComplaintNumber)
+	}
+
+	if editErr != nil {
+		errorMsg := Message{
+			ChatID:    c.ChatID,
+			Text:      fmt.Sprintf("❌ Complaint %s was marked as resolved on the website, but I could not update the original Telegram message.", pending.ComplaintNumber),
+			ParseMode: "HTML",
+		}
+		c.doRequest("sendMessage", errorMsg)
+		return
 	}
 
 	log.Printf("✓ Successfully resolved complaint %s with note\n", pending.ComplaintNumber)

@@ -305,48 +305,49 @@ func markResolvedComplaints(stor *storage.Storage, tg *telegram.Client, wa *what
 	resolvedCount := 0
 	for _, complaintID := range allSeen {
 		if !activeIDsMap[complaintID] {
+			log.Printf("✅ Marking complaint %s as resolved", complaintID)
+
 			messageID := stor.GetMessageID(complaintID)
-			if messageID != "" && tg != nil {
-				log.Printf("✅ Marking complaint %s as resolved", complaintID)
+			consumerName := stor.GetConsumerName(complaintID)
+			if consumerName == "" {
+				consumerName = "Unknown"
+			}
 
-				consumerName := stor.GetConsumerName(complaintID)
-				if consumerName == "" {
-					consumerName = "Unknown"
+			resolvedMessage := fmt.Sprintf(
+				"✅ <b>RESOLVED</b>\n\n"+
+					"Complaint #%s\n"+
+					"👤 %s\n"+
+					"🕐 %s",
+				complaintID,
+				consumerName,
+				time.Now().Format("02 Jan 2006, 03:04 PM"),
+			)
+
+			if tg != nil {
+				if messageID == "" {
+					log.Printf("⚠️  Complaint %s has no Telegram message ID; removing from storage based on website state", complaintID)
+				} else if err := tg.EditMessageText(tg.ChatID, messageID, resolvedMessage); err != nil {
+					log.Printf("⚠️  Failed to edit message for complaint %s: %v", complaintID, err)
 				}
+			}
 
-				resolvedMessage := fmt.Sprintf(
-					"✅ <b>RESOLVED</b>\n\n"+
-						"Complaint #%s\n"+
-						"👤 %s\n"+
-						"🕐 %s",
+			if wa != nil {
+				waResolvedMsg := fmt.Sprintf(
+					"✅ RESOLVED\n\nComplaint #%s\n👤 %s\n🕐 %s",
 					complaintID,
 					consumerName,
 					time.Now().Format("02 Jan 2006, 03:04 PM"),
 				)
-
-				err := tg.EditMessageText(tg.ChatID, messageID, resolvedMessage)
-				if err != nil {
-					log.Printf("⚠️  Failed to edit message for complaint %s: %v", complaintID, err)
-				} else {
-					if rmErr := stor.Remove(complaintID); rmErr != nil {
-						log.Printf("⚠️  Failed to remove complaint %s from storage: %v", complaintID, rmErr)
-					} else {
-						log.Printf("✅ Removed resolved complaint %s from storage", complaintID)
-						resolvedCount++
-					}
+				if waErr := wa.SendMessage(waResolvedMsg); waErr != nil {
+					log.Printf("⚠️  Failed to send WhatsApp resolved notice for %s: %v", complaintID, waErr)
 				}
+			}
 
-				if wa != nil {
-					waResolvedMsg := fmt.Sprintf(
-						"✅ RESOLVED\n\nComplaint #%s\n👤 %s\n🕐 %s",
-						complaintID,
-						consumerName,
-						time.Now().Format("02 Jan 2006, 03:04 PM"),
-					)
-					if waErr := wa.SendMessage(waResolvedMsg); waErr != nil {
-						log.Printf("⚠️  Failed to send WhatsApp resolved notice for %s: %v", complaintID, waErr)
-					}
-				}
+			if rmErr := stor.Remove(complaintID); rmErr != nil {
+				log.Printf("⚠️  Failed to remove complaint %s from storage: %v", complaintID, rmErr)
+			} else {
+				log.Printf("✅ Removed resolved complaint %s from storage", complaintID)
+				resolvedCount++
 			}
 		}
 	}

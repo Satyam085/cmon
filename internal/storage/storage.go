@@ -298,11 +298,22 @@ func (s *Storage) GetMessageID(complaintID string) string {
 	return s.messageIDs[complaintID]
 }
 
-// SetMessageID sets the Telegram message ID for a complaint (memory only).
-func (s *Storage) SetMessageID(complaintID, messageID string) {
+// SetMessageID updates both memory and DB with a new Telegram message ID.
+func (s *Storage) SetMessageID(complaintID, messageID string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+
+	if !s.seen[complaintID] {
+		return fmt.Errorf("complaint %s not found in storage", complaintID)
+	}
+
+	if _, err := s.db.Exec(`UPDATE complaints SET tg_message_id = ? WHERE complaint_id = ?`, messageID, complaintID); err != nil {
+		log.Printf("⚠️  Failed to persist Telegram message ID for %s: %v", complaintID, err)
+		return err
+	}
+
 	s.messageIDs[complaintID] = messageID
+	return nil
 }
 
 // SetWAMessageID updates both memory and DB with a new WhatsApp Message ID.
@@ -316,15 +327,19 @@ func (s *Storage) SetWAMessageID(complaintID, waMessageID string) error {
 		return fmt.Errorf("complaint %s not found in storage", complaintID)
 	}
 
-	// Update memory
-	s.waMessageIDs[complaintID] = waMessageID
-	s.waMessageToComplaint[waMessageID] = complaintID
-
-	// Update DB immediately
-	_, err := s.db.Exec(`UPDATE complaints SET wa_message_id = ? WHERE complaint_id = ?`, waMessageID, complaintID)
-	if err != nil {
+	// Update DB before memory so the in-memory reverse index never gets ahead of
+	// the persisted source of truth.
+	if _, err := s.db.Exec(`UPDATE complaints SET wa_message_id = ? WHERE complaint_id = ?`, waMessageID, complaintID); err != nil {
 		log.Printf("⚠️  Failed to persist WA message ID for %s: %v", complaintID, err)
 		return err
+	}
+
+	if oldWAMessageID := s.waMessageIDs[complaintID]; oldWAMessageID != "" && oldWAMessageID != waMessageID {
+		delete(s.waMessageToComplaint, oldWAMessageID)
+	}
+	s.waMessageIDs[complaintID] = waMessageID
+	if waMessageID != "" {
+		s.waMessageToComplaint[waMessageID] = complaintID
 	}
 	return nil
 }
@@ -518,6 +533,9 @@ func (s *Storage) SaveMultiple(records []Record) error {
 			s.messageIDs[r.ComplaintID] = r.MessageID
 		}
 		if r.WAMessageID != "" {
+			if oldWAMessageID := s.waMessageIDs[r.ComplaintID]; oldWAMessageID != "" && oldWAMessageID != r.WAMessageID {
+				delete(s.waMessageToComplaint, oldWAMessageID)
+			}
 			s.waMessageIDs[r.ComplaintID] = r.WAMessageID
 			s.waMessageToComplaint[r.WAMessageID] = r.ComplaintID
 		}
@@ -543,8 +561,22 @@ func (s *Storage) Remove(complaintID string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	_, err := s.db.Exec(`DELETE FROM complaints WHERE complaint_id = ?`, complaintID)
+	tx, err := s.db.Begin()
 	if err != nil {
+		return err
+	}
+
+	if _, err := tx.Exec(`DELETE FROM pending_resolutions WHERE complaint_id = ?`, complaintID); err != nil {
+		tx.Rollback()
+		return err
+	}
+
+	if _, err := tx.Exec(`DELETE FROM complaints WHERE complaint_id = ?`, complaintID); err != nil {
+		tx.Rollback()
+		return err
+	}
+
+	if err := tx.Commit(); err != nil {
 		return err
 	}
 
@@ -574,8 +606,22 @@ func (s *Storage) RemoveIfExists(complaintID string) (bool, error) {
 		return false, nil
 	}
 
-	_, err := s.db.Exec(`DELETE FROM complaints WHERE complaint_id = ?`, complaintID)
+	tx, err := s.db.Begin()
 	if err != nil {
+		return false, err
+	}
+
+	if _, err := tx.Exec(`DELETE FROM pending_resolutions WHERE complaint_id = ?`, complaintID); err != nil {
+		tx.Rollback()
+		return false, err
+	}
+
+	if _, err := tx.Exec(`DELETE FROM complaints WHERE complaint_id = ?`, complaintID); err != nil {
+		tx.Rollback()
+		return false, err
+	}
+
+	if err := tx.Commit(); err != nil {
 		return false, err
 	}
 

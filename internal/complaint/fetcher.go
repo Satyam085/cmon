@@ -86,8 +86,7 @@ func (f *Fetcher) FetchAll(baseURL string) ([]string, error) {
 
 		pageIDs, err := f.scrapePage(doc)
 		if err != nil {
-			log.Printf("  ⚠️  Error scraping page %d: %v", currentPage, err)
-			break
+			return nil, errors.NewFetchError(fmt.Sprintf("failed to scrape page %d", currentPage), err)
 		}
 		allActiveComplaintIDs = append(allActiveComplaintIDs, pageIDs...)
 
@@ -99,12 +98,15 @@ func (f *Fetcher) FetchAll(baseURL string) ([]string, error) {
 
 		doc, err = f.sc.GetDoc(nextURL)
 		if err != nil {
-			break
+			return nil, errors.NewFetchError(fmt.Sprintf("failed to fetch page %d", currentPage+1), err)
 		}
 
 		// Session check on each new page
 		if doc.Find("#email_or_username").Length() > 0 {
 			return nil, errors.NewSessionExpiredError("session expired during pagination")
+		}
+		if doc.Find("#dataTable").Length() == 0 {
+			return nil, errors.NewFetchError(fmt.Sprintf("page %d loaded but #dataTable not found", currentPage+1), nil)
 		}
 
 		currentPage++
@@ -115,6 +117,10 @@ func (f *Fetcher) FetchAll(baseURL string) ([]string, error) {
 
 // scrapePage extracts links from the current page and processes new complaints.
 func (f *Fetcher) scrapePage(doc *goquery.Document) ([]string, error) {
+	if doc.Find("#dataTable").Length() == 0 {
+		return nil, fmt.Errorf("#dataTable not found")
+	}
+
 	complaintLinks := extractLinks(doc)
 
 	var allIDsOnPage []string
@@ -135,14 +141,16 @@ func (f *Fetcher) scrapePage(doc *goquery.Document) ([]string, error) {
 	}
 
 	if len(newComplaints) > 0 {
-		f.processComplaintsConcurrently(newComplaints)
+		if err := f.processComplaintsConcurrently(newComplaints); err != nil {
+			return nil, err
+		}
 	}
 
 	return allIDsOnPage, nil
 }
 
 // processComplaintsConcurrently processes complaints using a worker pool.
-func (f *Fetcher) processComplaintsConcurrently(complaints []Link) {
+func (f *Fetcher) processComplaintsConcurrently(complaints []Link) error {
 	apiIDMap := make(map[string]string)
 	for _, c := range complaints {
 		apiIDMap[c.ComplaintNumber] = c.APIID
@@ -166,7 +174,10 @@ func (f *Fetcher) processComplaintsConcurrently(complaints []Link) {
 	}
 
 	if len(results) == 0 {
-		return
+		if len(complaints) > 0 {
+			return fmt.Errorf("failed to process any of %d new complaints", len(complaints))
+		}
+		return nil
 	}
 
 	safeStr := func(v interface{}) string {
@@ -212,8 +223,16 @@ func (f *Fetcher) processComplaintsConcurrently(complaints []Link) {
 		}
 	}
 
-	// Phase 3 & 4: Telegram Notifications and DB Save
+	type notification struct {
+		ComplaintID   string
+		ComplaintJSON string
+		GujaratiText  string
+		WAText        string
+	}
+
+	// Phase 3: Persist complaint records before any external side effects.
 	var recordsToSave []storage.Record
+	var notifications []notification
 	for i, res := range results {
 		gujoName := translations[i].name
 		gujoDesc := translations[i].desc
@@ -226,31 +245,45 @@ func (f *Fetcher) processComplaintsConcurrently(complaints []Link) {
 
 		prettyJSON, _ := json.MarshalIndent(res.Details, "  ", "  ")
 
-		var messageID string
-		if f.tg != nil {
-			msgID, err := f.tg.SendComplaintMessage(string(prettyJSON), res.ComplaintID, gujaratiText)
-			if err != nil {
-				log.Printf("    ⚠️  Failed to send Telegram msg for %s: %v", res.ComplaintID, err)
-			} else {
-				messageID = msgID
-			}
-		}
-
 		record := storage.Record{
 			ComplaintID:  res.ComplaintID,
-			MessageID:    messageID,
 			APIID:        apiIDMap[res.ComplaintID],
 			ConsumerName: res.ConsumerName,
 			Village:      res.Details.Village,
 			Belt:         res.Details.Belt,
 		}
 		recordsToSave = append(recordsToSave, record)
+		notifications = append(notifications, notification{
+			ComplaintID:   res.ComplaintID,
+			ComplaintJSON: string(prettyJSON),
+			GujaratiText:  gujaratiText,
+			WAText:        buildWhatsAppMessage(res.Details, gujaratiText),
+		})
 	}
 
-	// Batch save to storage FIRST
+	// Complaint identity and metadata must be durable before we emit channel
+	// notifications, otherwise the DB can fall behind visible side effects.
 	if len(recordsToSave) > 0 {
 		if err := f.storage.SaveMultiple(recordsToSave); err != nil {
-			log.Println("    ⚠️  Failed to save records:", err)
+			return fmt.Errorf("failed to save complaint records: %w", err)
+		}
+	}
+
+	// Phase 4: Telegram notifications + message ID persistence
+	if f.tg != nil {
+		for _, n := range notifications {
+			msgID, err := f.tg.SendComplaintMessage(n.ComplaintJSON, n.ComplaintID, n.GujaratiText)
+			if err != nil {
+				log.Printf("    ⚠️  Failed to send Telegram msg for %s: %v", n.ComplaintID, err)
+				continue
+			}
+			if msgID == "" {
+				log.Printf("    ⚠️  Telegram sent complaint %s but returned no message ID", n.ComplaintID)
+				continue
+			}
+			if err := f.storage.SetMessageID(n.ComplaintID, msgID); err != nil {
+				log.Printf("    ⚠️  Failed to persist Telegram message ID for %s: %v", n.ComplaintID, err)
+			}
 		}
 	}
 
@@ -259,27 +292,18 @@ func (f *Fetcher) processComplaintsConcurrently(complaints []Link) {
 	// whatsmeow prefetches encryption sessions from its internal SQLite DB when
 	// sending — firing multiple sends too quickly causes SQLITE_BUSY contention.
 	if f.wa != nil {
-		for i, res := range results {
+		for i, n := range notifications {
 			if i > 0 {
 				time.Sleep(1 * time.Second)
 			}
 
-			gujoName := translations[i].name
-			gujoDesc := translations[i].desc
-			gujoAddr := translations[i].addr
-
-			gujaratiText := ""
-			if gujoName != "" || gujoDesc != "" || gujoAddr != "" {
-				gujaratiText = fmt.Sprintf("👤 %s\n💬 %s\n📍 %s", gujoName, gujoDesc, gujoAddr)
-			}
-
-			waText := buildWhatsAppMessage(res.Details, gujaratiText)
-			if err := f.wa.SendComplaintMessage(waText, res.ComplaintID, f.storage); err != nil {
-				log.Printf("    ⚠️  Failed to send WhatsApp msg for %s: %v", res.ComplaintID, err)
+			if err := f.wa.SendComplaintMessage(n.WAText, n.ComplaintID, f.storage); err != nil {
+				log.Printf("    ⚠️  Failed to send WhatsApp msg for %s: %v", n.ComplaintID, err)
 			}
 		}
 	}
 
+	return nil
 }
 
 // buildWhatsAppMessage formats complaint details as plain text for WhatsApp.
