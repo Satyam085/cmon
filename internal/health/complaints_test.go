@@ -37,7 +37,7 @@ func TestDashboardRoutes(t *testing.T) {
 	})
 
 	mux := http.NewServeMux()
-	registerComplaintDashboard(mux, NewMonitor(), nil, stor)
+	registerComplaintDashboard(mux, NewMonitor(), nil, stor, nil)
 
 	t.Run("root serves dashboard", func(t *testing.T) {
 		req := httptest.NewRequest(http.MethodGet, "/", nil)

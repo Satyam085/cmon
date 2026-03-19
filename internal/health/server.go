@@ -112,6 +112,11 @@ func (m *Monitor) GetStatus() Status {
 	}
 }
 
+// RefreshFunc is called by the dashboard to trigger a full scrape cycle
+// before returning data. It should update storage with the latest complaints
+// from the website. Returns nil on success.
+type RefreshFunc func() error
+
 // StartServer starts the local CMON dashboard server.
 //
 // Endpoints:
@@ -125,9 +130,10 @@ func (m *Monitor) GetStatus() Status {
 //   - port: Port to listen on (e.g., "8080")
 //   - sc: Authenticated session client used by the complaints dashboard
 //   - stor: Complaint storage used by the complaints dashboard
-func StartServer(monitor *Monitor, port string, sc *session.Client, stor *storage.Storage) {
+//   - refreshFn: Optional function to trigger a scrape cycle before returning data
+func StartServer(monitor *Monitor, port string, sc *session.Client, stor *storage.Storage, refreshFn RefreshFunc) {
 	mux := http.NewServeMux()
-	registerComplaintDashboard(mux, monitor, sc, stor)
+	registerComplaintDashboard(mux, monitor, sc, stor, refreshFn)
 
 	go func() {
 		// Bind only to loopback — the dashboard has no authentication.

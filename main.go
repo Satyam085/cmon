@@ -29,6 +29,7 @@ import (
 	"log"
 	"os"
 	"os/signal"
+	"sync"
 	"syscall"
 	"time"
 	_ "time/tzdata"
@@ -44,6 +45,9 @@ import (
 	"cmon/internal/translate"
 	"cmon/internal/whatsapp"
 )
+
+// fetchMu prevents concurrent scrape cycles (ticker vs dashboard refresh).
+var fetchMu sync.Mutex
 
 func main() {
 	// Force Indian Standard Time (IST) for all time operations
@@ -96,8 +100,24 @@ func main() {
 	}
 	log.Println("✓ Session client created")
 
+	// Build the refresh function that the dashboard can call to trigger a scrape.
+	// Uses TryLock so concurrent refresh requests return immediately instead of queuing.
+	refreshFn := func() error {
+		if !fetchMu.TryLock() {
+			return fmt.Errorf("a scrape cycle is already in progress, please wait")
+		}
+		defer fetchMu.Unlock()
+		return fetchWithRetry(
+			sc, cfg.ComplaintURL, stor, tg, wa,
+			cfg.LoginURL, cfg.Username, cfg.Password,
+			cfg, cfg.MaxFetchRetries, cfg.FetchTimeout,
+			healthMonitor, translator,
+			true, // silent: don't send critical Telegram alerts for dashboard-triggered scrapes
+		)
+	}
+
 	// Step 6: Start health check server in background
-	health.StartServer(healthMonitor, cfg.HealthCheckPort, sc, stor)
+	health.StartServer(healthMonitor, cfg.HealthCheckPort, sc, stor, refreshFn)
 
 	// Step 7: Start Telegram callback handler if configured
 	if tg != nil {
@@ -134,6 +154,7 @@ func main() {
 	}
 
 	log.Println("📬 Fetching complaints...")
+	fetchMu.Lock()
 	fetchErr := fetchWithRetry(
 		sc,
 		cfg.ComplaintURL,
@@ -148,7 +169,9 @@ func main() {
 		cfg.FetchTimeout,
 		healthMonitor,
 		translator,
+		false,
 	)
+	fetchMu.Unlock()
 	if fetchErr != nil {
 		log.Fatal("❌ Failed initial fetch after all retries:", fetchErr)
 	}
@@ -177,6 +200,7 @@ func main() {
 		case <-ticker.C:
 			log.Printf("📬 Refreshing — %s", time.Now().Format("15:04:05"))
 
+			fetchMu.Lock()
 			fetchErr := fetchWithRetry(
 				sc,
 				cfg.ComplaintURL,
@@ -191,7 +215,9 @@ func main() {
 				cfg.FetchTimeout,
 				healthMonitor,
 				translator,
+				false,
 			)
+			fetchMu.Unlock()
 
 			if fetchErr != nil {
 				log.Println("⚠️  Final error after all retry attempts:", fetchErr)
@@ -222,6 +248,7 @@ func fetchWithRetry(
 	fetchTimeout time.Duration,
 	healthMonitor *health.Monitor,
 	translator *translate.Translator,
+	silent bool,
 ) error {
 	var lastErr error
 
@@ -277,7 +304,7 @@ func fetchWithRetry(
 
 	healthMonitor.UpdateFetchStatus(fmt.Sprintf("error: %v", lastErr))
 
-	if tg != nil {
+	if !silent && tg != nil {
 		log.Println("🚨 Sending critical failure alert...")
 		alertErr := tg.SendCriticalAlert(
 			"Fetch/Login Failure",

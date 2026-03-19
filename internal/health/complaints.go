@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"html/template"
 	"image/color"
+	"log"
 	"net/http"
 	"strings"
 	"time"
@@ -723,33 +724,47 @@ var complaintsPageTemplate = template.Must(template.New("complaints-page").Parse
         content.innerHTML = '<div class="group-stack">' + visibleGroups.map((group) => buildGroup(group, group.complaints)).join("") + '</div>';
       }
 
+      async function fetchDashboardData() {
+        const response = await fetch(dataUrl + "?ts=" + Date.now(), {
+          headers: { "Accept": "application/json" }
+        });
+        const data = await response.json().catch(() => ({}));
+        if (!response.ok) {
+          throw new Error(data.error || ("Request failed with status " + response.status));
+        }
+        return data;
+      }
+
       async function loadData(options = {}) {
         const silent = !!options.silent;
+        const triggerScrape = !!options.scrape;
         if (isLoading) {
           return;
         }
 
         isLoading = true;
         refreshBtn.disabled = true;
-        refreshBtn.textContent = "Refreshing...";
-
-        if (!silent) {
-          setBanner("info", "Refreshing complaints...", "Fetching the latest pending complaint details from the live session.");
-        }
 
         try {
-          const response = await fetch(dataUrl + "?ts=" + Date.now(), {
-            headers: {
-              "Accept": "application/json"
-            }
-          });
+          if (triggerScrape) {
+            refreshBtn.textContent = "Scraping website...";
+            setBanner("info", "Scraping complaints...", "Running a full scrape cycle against the DGVCL portal. This may take a moment.");
 
-          const data = await response.json().catch(() => ({}));
-          if (!response.ok) {
-            throw new Error(data.error || ("Request failed with status " + response.status));
+            const scrapeResp = await fetch("/refresh", { method: "POST" });
+            const scrapeData = await scrapeResp.json().catch(() => ({}));
+            if (!scrapeResp.ok) {
+              const msg = scrapeData.error || "Scrape failed";
+              setBanner("error", "Scrape failed.", msg);
+              // Still load current data below even if scrape failed
+            }
           }
 
-          payload = data;
+          refreshBtn.textContent = "Loading...";
+          if (!silent && !triggerScrape) {
+            setBanner("info", "Loading complaints...", "Fetching dashboard data.");
+          }
+
+          payload = await fetchDashboardData();
           render();
 
           const fetchStatus = payload.status.last_fetch_status || "unknown";
@@ -779,15 +794,16 @@ var complaintsPageTemplate = template.Must(template.New("complaints-page").Parse
       debugToggle.addEventListener("change", () => {
         document.body.classList.toggle("show-debug", debugToggle.checked);
       });
-      refreshBtn.addEventListener("click", () => loadData());
+      refreshBtn.addEventListener("click", () => loadData({ scrape: true }));
 
-      loadData();
+      // Initial page load: just show what's in storage (fast), no scrape.
+      loadData({ silent: true });
     })();
   </script>
 </body>
 </html>`))
 
-func registerComplaintDashboard(mux *http.ServeMux, monitor *Monitor, sc *session.Client, stor *storage.Storage) {
+func registerComplaintDashboard(mux *http.ServeMux, monitor *Monitor, sc *session.Client, stor *storage.Storage, refreshFn RefreshFunc) {
 	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path != "/" {
 			http.NotFound(w, r)
@@ -819,6 +835,28 @@ func registerComplaintDashboard(mux *http.ServeMux, monitor *Monitor, sc *sessio
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusOK)
 		_ = json.NewEncoder(w).Encode(payload)
+	})
+
+	mux.HandleFunc("/refresh", func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost {
+			writeJSONError(w, http.StatusMethodNotAllowed, "method not allowed")
+			return
+		}
+
+		if refreshFn == nil {
+			writeJSONError(w, http.StatusServiceUnavailable, "refresh not available")
+			return
+		}
+
+		if err := refreshFn(); err != nil {
+			log.Printf("⚠️  Dashboard-triggered scrape failed: %v", err)
+			writeJSONError(w, http.StatusBadGateway, err.Error())
+			return
+		}
+
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		_ = json.NewEncoder(w).Encode(map[string]string{"status": "ok"})
 	})
 
 	mux.HandleFunc("/complaints", func(w http.ResponseWriter, r *http.Request) {
