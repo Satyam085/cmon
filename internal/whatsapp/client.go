@@ -31,6 +31,7 @@ import (
 	"time"
 
 	"cmon/internal/belt"
+
 	_ "modernc.org/sqlite"
 
 	"cmon/internal/session"
@@ -417,7 +418,7 @@ func (c *Client) handleResolve(sc *session.Client, stor resolveStorage, tg *tele
 		}
 
 		resolvedMessage := fmt.Sprintf(
-			"✅ <b>RESOLVED</b>\n\n"+
+			"✅ <b>RESOLVE</b>\n\n"+
 				"Complaint #%s\n"+
 				"👤 %s\n"+
 				"🕐 %s",
