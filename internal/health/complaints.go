@@ -10,6 +10,7 @@ import (
 	"strings"
 	"time"
 
+	"cmon/internal/api"
 	"cmon/internal/belt"
 	"cmon/internal/session"
 	"cmon/internal/storage"
@@ -573,6 +574,148 @@ var complaintsPageTemplate = template.Must(template.New("complaints-page").Parse
     }
     .error-box strong { display: block; margin-bottom: 4px; font-weight: 600; }
 
+    /* ── Resolve button ── */
+    .resolve-btn {
+      display: inline-flex;
+      align-items: center;
+      gap: 5px;
+      padding: 5px 10px;
+      background: var(--success-dim);
+      border: 1px solid rgba(74,222,128,0.2);
+      border-radius: 5px;
+      color: var(--success);
+      font-family: var(--font-sans);
+      font-size: 12px;
+      font-weight: 600;
+      cursor: pointer;
+      transition: background 0.15s, border-color 0.15s, opacity 0.15s;
+      white-space: nowrap;
+    }
+    .resolve-btn:hover {
+      background: rgba(74,222,128,0.22);
+      border-color: rgba(74,222,128,0.4);
+    }
+    .resolve-btn:disabled {
+      opacity: 0.45;
+      cursor: not-allowed;
+    }
+    .resolve-btn svg { width: 12px; height: 12px; flex-shrink: 0; }
+
+    /* ── Modal ── */
+    .modal-backdrop {
+      position: fixed;
+      inset: 0;
+      z-index: 10000;
+      background: rgba(0,0,0,0.6);
+      backdrop-filter: blur(4px);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      padding: 16px;
+      opacity: 0;
+      pointer-events: none;
+      transition: opacity 0.2s;
+    }
+    .modal-backdrop.open {
+      opacity: 1;
+      pointer-events: auto;
+    }
+    .modal {
+      background: var(--surface-raised);
+      border: 1px solid var(--border-bright);
+      border-radius: 10px;
+      padding: 24px;
+      width: 100%;
+      max-width: 420px;
+      box-shadow: 0 24px 64px rgba(0,0,0,0.5);
+      transform: translateY(12px);
+      transition: transform 0.2s;
+    }
+    .modal-backdrop.open .modal { transform: translateY(0); }
+    .modal-title {
+      font-size: 15px;
+      font-weight: 700;
+      color: var(--text);
+      margin-bottom: 4px;
+    }
+    .modal-sub {
+      font-size: 12px;
+      color: var(--text-dim);
+      margin-bottom: 18px;
+    }
+    .modal-sub strong { color: var(--text); }
+    .modal-label {
+      font-size: 11px;
+      font-weight: 600;
+      text-transform: uppercase;
+      letter-spacing: 0.07em;
+      color: var(--text-faint);
+      margin-bottom: 6px;
+    }
+    .modal-textarea {
+      width: 100%;
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      color: var(--text);
+      font-family: var(--font-sans);
+      font-size: 13px;
+      padding: 10px 12px;
+      outline: none;
+      resize: vertical;
+      min-height: 80px;
+      transition: border-color 0.15s, box-shadow 0.15s;
+      box-sizing: border-box;
+    }
+    .modal-textarea:focus {
+      border-color: var(--success);
+      box-shadow: 0 0 0 3px rgba(74,222,128,0.12);
+    }
+    .modal-actions {
+      display: flex;
+      gap: 10px;
+      margin-top: 18px;
+      justify-content: flex-end;
+    }
+    .modal-cancel {
+      padding: 9px 16px;
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      color: var(--text-dim);
+      font-family: var(--font-sans);
+      font-size: 13px;
+      font-weight: 500;
+      cursor: pointer;
+      transition: background 0.15s, color 0.15s;
+    }
+    .modal-cancel:hover { background: var(--surface-bright); color: var(--text); }
+    .modal-confirm {
+      padding: 9px 18px;
+      background: var(--success);
+      border: 1px solid transparent;
+      border-radius: 6px;
+      color: #0c0e12;
+      font-family: var(--font-sans);
+      font-size: 13px;
+      font-weight: 700;
+      cursor: pointer;
+      transition: opacity 0.15s, transform 0.1s;
+    }
+    .modal-confirm:hover { opacity: 0.88; }
+    .modal-confirm:active { transform: scale(0.97); }
+    .modal-confirm:disabled { opacity: 0.45; cursor: not-allowed; transform: none; }
+    .modal-spinner {
+      display: inline-block;
+      width: 12px; height: 12px;
+      border: 2px solid rgba(12,14,18,0.3);
+      border-top-color: #0c0e12;
+      border-radius: 50%;
+      animation: spin 0.7s linear infinite;
+      vertical-align: middle;
+      margin-right: 6px;
+    }
+
     /* ── Responsive ── */
     @media (max-width:960px) {
       .stats-row { grid-template-columns: repeat(2,1fr); }
@@ -698,6 +841,20 @@ var complaintsPageTemplate = template.Must(template.New("complaints-page").Parse
     <section id="content" class="groups"></section>
   </main>
 
+  <!-- Resolve Modal -->
+  <div id="resolveModal" class="modal-backdrop" role="dialog" aria-modal="true" aria-labelledby="modalTitle">
+    <div class="modal">
+      <div class="modal-title" id="modalTitle">✅ Mark as Resolved</div>
+      <div class="modal-sub" id="modalSub">Complaint <strong id="modalComplaintNo"></strong></div>
+      <div class="modal-label">Remark (optional)</div>
+      <textarea id="modalRemark" class="modal-textarea" placeholder="Enter resolution note..." rows="3"></textarea>
+      <div class="modal-actions">
+        <button id="modalCancelBtn" class="modal-cancel" type="button">Cancel</button>
+        <button id="modalConfirmBtn" class="modal-confirm" type="button">Mark Resolved</button>
+      </div>
+    </div>
+  </div>
+
   <script>
     (() => {
       const DATA_URL = {{.DataURL}};
@@ -794,6 +951,13 @@ var complaintsPageTemplate = template.Must(template.New("complaints-page").Parse
       function buildRow(c) {
         const tg = c.telegram_message_id || "—";
         const wa = c.whatsapp_message_id || "—";
+        const apiID = c.api_id || "";
+        const resolveBtn = apiID
+          ? '<button class="resolve-btn" data-api-id="' + esc(apiID) + '" data-complaint-no="' + esc(c.complain_no || "") + '" title="Mark complaint as resolved on the DGVCL portal">' +
+              '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="20 6 9 17 4 12"/></svg>' +
+              'Resolve' +
+            '</button>'
+          : '<span style="color:var(--text-faint);font-size:11px">—</span>';
         return '<tr>' +
           '<td data-label="Complaint" class="mono">' + esc(c.complain_no || "—") + '</td>' +
           '<td data-label="Name">' + esc(c.name || "—") + '</td>' +
@@ -805,6 +969,7 @@ var complaintsPageTemplate = template.Must(template.New("complaints-page").Parse
           '<td data-label="Date" class="mono">' + esc(c.complain_date || "—") + '</td>' +
           '<td data-label="Telegram" class="debug-col mono">' + esc(tg) + '</td>' +
           '<td data-label="WhatsApp" class="debug-col mono">' + esc(wa) + '</td>' +
+          '<td data-label="Action">' + resolveBtn + '</td>' +
         '</tr>';
       }
 
@@ -827,6 +992,7 @@ var complaintsPageTemplate = template.Must(template.New("complaints-page").Parse
               '<th>Complaint</th><th>Name</th><th>Consumer</th><th>Mobile</th>' +
               '<th>Address</th><th>Area</th><th>Description</th><th>Date</th>' +
               '<th class="debug-col">Telegram</th><th class="debug-col">WhatsApp</th>' +
+              '<th>Action</th>' +
             '</tr></thead>' +
             '<tbody>' + rows + '</tbody>' +
           '</table></div></div>' +
@@ -891,7 +1057,89 @@ var complaintsPageTemplate = template.Must(template.New("complaints-page").Parse
             if (e.key === "Enter" || e.key === " ") { e.preventDefault(); hdr.click(); }
           });
         });
+
+        // Bind resolve buttons
+        contentEl.querySelectorAll(".resolve-btn").forEach((btn) => {
+          btn.addEventListener("click", (e) => {
+            e.stopPropagation();
+            openResolveModal(btn.dataset.apiId, btn.dataset.complaintNo, btn);
+          });
+        });
       }
+
+      // ── Resolve modal ──
+      const resolveModal    = $("resolveModal");
+      const modalComplaintNo = $("modalComplaintNo");
+      const modalRemark     = $("modalRemark");
+      const modalCancelBtn  = $("modalCancelBtn");
+      const modalConfirmBtn = $("modalConfirmBtn");
+
+      let _pendingAPIID = null;
+      let _pendingComplaintNo = null;
+      let _pendingBtn = null;
+
+      function openResolveModal(apiID, complaintNo, btn) {
+        _pendingAPIID = apiID;
+        _pendingComplaintNo = complaintNo;
+        _pendingBtn = btn;
+        modalComplaintNo.textContent = complaintNo || apiID;
+        modalRemark.value = "";
+        modalConfirmBtn.disabled = false;
+        modalConfirmBtn.innerHTML = "Mark Resolved";
+        resolveModal.classList.add("open");
+        setTimeout(() => modalRemark.focus(), 150);
+      }
+
+      function closeResolveModal() {
+        resolveModal.classList.remove("open");
+        _pendingAPIID = null;
+        _pendingComplaintNo = null;
+        _pendingBtn = null;
+      }
+
+      modalCancelBtn.addEventListener("click", closeResolveModal);
+      resolveModal.addEventListener("click", (e) => { if (e.target === resolveModal) closeResolveModal(); });
+
+      modalConfirmBtn.addEventListener("click", async () => {
+        if (!_pendingAPIID) return;
+        const savedAPIID = _pendingAPIID;
+        const savedComplaintNo = _pendingComplaintNo;
+        const savedBtn = _pendingBtn;
+        modalConfirmBtn.disabled = true;
+        modalConfirmBtn.innerHTML = '<span class="modal-spinner"></span>Resolving...';
+        modalCancelBtn.disabled = true;
+
+        try {
+          const resp = await fetch("/resolve", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ complaint_id: savedAPIID, remark: modalRemark.value.trim() })
+          });
+          const data = await resp.json().catch(() => ({}));
+          if (!resp.ok) throw new Error(data.error || "Status " + resp.status);
+
+          // Visual feedback: dim resolved row
+          if (savedBtn) {
+            const row = savedBtn.closest("tr");
+            if (row) { row.style.opacity = "0.4"; row.style.transition = "opacity 0.4s"; }
+            savedBtn.disabled = true;
+            savedBtn.innerHTML = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="20 6 9 17 4 12"/></svg> Resolved';
+          }
+
+          closeResolveModal();
+          setBanner("success", "<strong>Resolved.</strong> Complaint #" + esc(savedComplaintNo || savedAPIID) + " marked as resolved on the portal.");
+
+          // Silently reload after a short delay
+          setTimeout(() => loadData({ silent: true }), 3500);
+        } catch (err) {
+          setBanner("error", "<strong>Resolve failed.</strong> " + esc(err.message));
+          closeResolveModal();
+        } finally {
+          modalConfirmBtn.disabled = false;
+          modalCancelBtn.disabled = false;
+          modalConfirmBtn.innerHTML = "Mark Resolved";
+        }
+      });
 
       // Fetch
       async function fetchData() {
@@ -981,10 +1229,13 @@ var complaintsPageTemplate = template.Must(template.New("complaints-page").Parse
           e.preventDefault();
           searchInput.focus();
         }
-        if (e.key === "Escape" && document.activeElement === searchInput) {
-          searchInput.value = "";
-          searchInput.blur();
-          render();
+        if (e.key === "Escape") {
+          if (resolveModal.classList.contains("open")) { closeResolveModal(); return; }
+          if (document.activeElement === searchInput) {
+            searchInput.value = "";
+            searchInput.blur();
+            render();
+          }
         }
       });
 
@@ -1043,6 +1294,43 @@ func registerComplaintDashboard(mux *http.ServeMux, monitor *Monitor, sc *sessio
 
 		if err := refreshFn(); err != nil {
 			log.Printf("⚠️  Dashboard-triggered scrape failed: %v", err)
+			writeJSONError(w, http.StatusBadGateway, err.Error())
+			return
+		}
+
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		_ = json.NewEncoder(w).Encode(map[string]string{"status": "ok"})
+	})
+
+	// /resolve — mark a complaint as resolved on the DGVCL portal
+	mux.HandleFunc("/resolve", func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost {
+			writeJSONError(w, http.StatusMethodNotAllowed, "method not allowed")
+			return
+		}
+
+		var req struct {
+			ComplaintID string `json:"complaint_id"`
+			Remark      string `json:"remark"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			writeJSONError(w, http.StatusBadRequest, "invalid JSON body")
+			return
+		}
+		if req.ComplaintID == "" {
+			writeJSONError(w, http.StatusBadRequest, "complaint_id is required")
+			return
+		}
+
+		remark := req.Remark
+		if remark == "" {
+			remark = "Resolved via dashboard"
+		}
+
+		log.Printf("🌐 Dashboard: resolving complaint API ID %s (remark: %q)", req.ComplaintID, remark)
+		if err := api.ResolveComplaint(sc, req.ComplaintID, remark, false); err != nil {
+			log.Printf("⚠️  Dashboard resolve failed for %s: %v", req.ComplaintID, err)
 			writeJSONError(w, http.StatusBadGateway, err.Error())
 			return
 		}

@@ -135,6 +135,7 @@ func fetchComplaintDetail(sc *session.Client, stor *storage.Storage, apiID, comp
 		ComplainDate:      safeStr(detail["complain_date"]),
 		TelegramMessageID: stor.GetMessageID(complaintNumber),
 		WhatsAppMessageID: stor.GetWAMessageID(complaintNumber),
+		APIID:             apiID,
 	}, nil
 }
 

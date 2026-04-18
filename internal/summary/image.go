@@ -33,6 +33,9 @@ type Complaint struct {
 	ComplainDate      string `json:"complain_date"`
 	TelegramMessageID string `json:"telegram_message_id"`
 	WhatsAppMessageID string `json:"whatsapp_message_id"`
+	// APIID is the internal backend ID used for API calls (e.g. resolve).
+	// Included in the JSON payload for the dashboard resolve feature.
+	APIID string `json:"api_id"`
 }
 
 // Table styling constants — rendered at 2x scale for Telegram clarity
