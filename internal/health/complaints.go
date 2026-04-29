@@ -502,17 +502,15 @@ var complaintsPageTemplate = template.Must(template.New("complaints-page").Parse
     .group.collapsed .group-body { display: none; }
 
     /* ── Table ── */
-    .tbl-wrap { overflow-x: auto; }
+    .tbl-wrap { overflow: visible; }
     table {
       width: 100%;
       border-collapse: collapse;
-      font-size: 12px;
     }
     th, td {
       padding: 8px 12px;
       text-align: left;
       border-bottom: 1px solid var(--border);
-      white-space: nowrap;
     }
     th {
       font-size: 10px;
@@ -526,7 +524,7 @@ var complaintsPageTemplate = template.Must(template.New("complaints-page").Parse
     }
     td { color: var(--text); vertical-align: top; }
     .mono { font-family: var(--font-mono); font-size: 11px; }
-    .desc-cell { max-width: 200px; white-space: normal; word-break: break-word; }
+    .desc-cell { max-width: 200px; word-break: break-word; }
     tr:hover td { background: var(--surface-raised); }
 
     /* ── Debug columns — hidden by default ── */
@@ -697,38 +695,94 @@ var complaintsPageTemplate = template.Must(template.New("complaints-page").Parse
 
     /* Print styles */
     @media print {
-      body { background: white; }
-      body::before { display: none; }
-      .shell { max-width: 100%; padding: 0; margin: 0; }
+      * { transition: none !important; animation: none !important; }
+      body { background: white !important; color: #000 !important; font-size: 11px; }
+      body::before { display: none !important; }
+
+      .shell { max-width: 100%; padding: 8px 0 0; margin: 0; }
+
+      /* Hide non-print elements */
       .topbar, .stats-row, .toolbar, .banner, .dist-bar-wrap, .ws-status,
-      #resolveModal, .empty-state, .search-count,
-      .search-kbd, .debug-col, .complaint-col, .resolve-btn { display: none !important; }
-      .content { padding: 0; margin: 0; }
+      #resolveModal, .empty-state, .search-count, .search-kbd,
+      .debug-col, .complaint-col, .action-col,
+      .resolve-btn, .group-chevron { display: none !important; }
+
+      /* Title */
       .groups::before {
-        content: "CMON — Pending Complaints";
+        content: "CMON \2014  Pending Complaints";
         display: block;
-        font-size: 16px;
+        font-size: 15px;
         font-weight: 700;
-        margin-bottom: 12px;
-        padding-bottom: 8px;
-        border-bottom: 2px solid #333;
+        margin-bottom: 10px;
+        padding-bottom: 6px;
+        border-bottom: 2px solid #000;
       }
-      .group { break-inside: avoid; page-break-inside: avoid; margin-bottom: 16px; border: 1px solid #ccc; box-shadow: none; }
-      .group-header { background: #f5f5f5 !important; padding: 8px 12px; border-bottom: 1px solid #ccc; display: flex; justify-content: space-between; align-items: center; }
-      .group-indicator { width: 8px; height: 8px; border-radius: 50%; display: inline-block; margin-right: 8px; box-shadow: none; }
-      .group-name { font-weight: 600; font-size: 13px; }
-      .group-badge { font-size: 12px; padding: 2px 8px; border-radius: 10px; }
-      .group-chevron { display: none; }
-      .group-body { display: block !important; border-top: none; }
-      .tbl-wrap { overflow: visible; }
-      table { width: 100%; border-collapse: collapse; font-size: 10px; }
-      th, td { padding: 4px 6px; border: 1px solid #ddd; text-align: left; word-wrap: break-word; white-space: normal; }
-      th { background: #fafafa; font-weight: 600; font-size: 9px; text-transform: uppercase; position: static; }
-      td { vertical-align: top; }
-      tr:hover td { background: transparent; }
-      .mono { font-family: monospace; font-size: 9px; }
-      .desc-cell { max-width: 150px; }
+
+      /* Groups */
+      .groups { display: block; }
+      .group {
+        break-inside: avoid; page-break-inside: avoid;
+        margin-bottom: 20px;
+        padding-bottom: 16px;
+        border: none;
+        border-bottom: 2px dashed #999;
+        border-radius: 0 !important;
+        overflow: visible !important;
+        box-shadow: none !important;
+      }
+      .group:last-child {
+        border-bottom: none;
+        margin-bottom: 0;
+        padding-bottom: 0;
+      }
+      .group-header {
+        background: #eee !important;
+        padding: 6px 10px;
+        border-bottom: 1px solid #999;
+        border-radius: 0 !important;
+      }
+      .group-indicator {
+        width: 8px; height: 8px;
+        border-radius: 50%;
+        display: inline-block;
+        margin-right: 6px;
+        box-shadow: none !important;
+        print-color-adjust: exact; -webkit-print-color-adjust: exact;
+      }
+      .group-name { font-weight: 700; font-size: 12px; color: #000; }
+      .group-badge {
+        font-size: 11px; padding: 1px 6px;
+        border-radius: 8px; border: 1px solid #999;
+        background: transparent !important; color: #000 !important;
+      }
+      .group-body { display: block !important; border-top: none !important; }
       .group.collapsed .group-body { display: block !important; }
+
+      /* Table */
+      .tbl-wrap { overflow: visible !important; }
+      table { width: 100%; border-collapse: collapse; font-size: 10px; }
+      th, td {
+        padding: 3px 5px;
+        border: 1px solid #bbb;
+        text-align: left;
+        word-wrap: break-word;
+        white-space: normal;
+        color: #000;
+      }
+      th {
+        background: #f0f0f0 !important;
+        font-weight: 700;
+        font-size: 8px;
+        text-transform: uppercase;
+        letter-spacing: 0.04em;
+        position: static;
+        print-color-adjust: exact; -webkit-print-color-adjust: exact;
+      }
+      td { vertical-align: top; background: transparent !important; }
+      tbody tr { border-bottom: 2px solid #999; }
+      tr:hover td { background: transparent !important; }
+      .mono { font-family: monospace; font-size: 9px; }
+      .desc-cell { max-width: 140px; }
     }
 
   </style>
@@ -1005,7 +1059,7 @@ var complaintsPageTemplate = template.Must(template.New("complaints-page").Parse
           '<td data-label="Date" class="mono">' + esc(c.complain_date || "—") + '</td>' +
           '<td data-label="Telegram" class="debug-col mono">' + esc(tg) + '</td>' +
           '<td data-label="WhatsApp" class="debug-col mono">' + esc(wa) + '</td>' +
-          '<td data-label="Action">' + resolveBtn + '</td>' +
+          '<td data-label="Action" class="action-col">' + resolveBtn + '</td>' +
         '</tr>';
       }
 
@@ -1028,7 +1082,7 @@ var complaintsPageTemplate = template.Must(template.New("complaints-page").Parse
               '<th class="complaint-col">Complaint</th><th>Name</th><th>Consumer</th><th>Mobile</th>' +
               '<th>Address</th><th>Area</th><th>Description</th><th>Date</th>' +
               '<th class="debug-col">Telegram</th><th class="debug-col">WhatsApp</th>' +
-              '<th>Action</th>' +
+              '<th class="action-col">Action</th>' +
             '</tr></thead>' +
             '<tbody>' + rows + '</tbody>' +
           '</table></div></div>' +
