@@ -195,7 +195,7 @@ var complaintsPageTemplate = template.Must(template.New("complaints-page").Parse
     /* ── Stats row ── */
     .stats-row {
       display: grid;
-      grid-template-columns: repeat(4, 1fr);
+      grid-template-columns: repeat(2, 1fr);
       gap: 12px;
       margin-bottom: 16px;
     }
@@ -808,11 +808,6 @@ var complaintsPageTemplate = template.Must(template.New("complaints-page").Parse
         <div class="stat-value" id="groupCount">—</div>
         <div class="stat-sub" id="groupSub"></div>
       </div>
-      <div class="stat-card">
-        <div class="stat-label">Last Fetch</div>
-        <div class="stat-value" id="lastFetchTime" style="font-size:15px">—</div>
-        <div class="stat-sub" id="fetchSub"></div>
-      </div>
     </section>
 
     <!-- Distribution bar -->
@@ -1099,8 +1094,6 @@ var complaintsPageTemplate = template.Must(template.New("complaints-page").Parse
         $("totalSub").textContent = q ? "of " + payload.total_count + " total" : "complaints";
         setMetric("groupCount", q ? filtered.length : payload.group_count);
         $("groupSub").textContent = q ? "of " + payload.group_count + " total" : "active belts";
-        setMetric("lastFetchTime", payload.status.last_fetch_time || "—");
-        $("fetchSub").textContent = payload.status.last_fetch_status || "";
 
         // Search count
         if (q) {
