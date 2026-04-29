@@ -178,6 +178,10 @@ func main() {
 
 	healthMonitor.UpdateFetchStatus("success")
 
+	if health.WSHub != nil {
+		health.WSHub.BroadcastRefresh()
+	}
+
 	log.Printf("⏰ Running — next check in %v\n", cfg.FetchInterval)
 	log.Println("═══════════════════════════════════════════════════════════")
 
@@ -221,6 +225,8 @@ func main() {
 
 			if fetchErr != nil {
 				log.Println("⚠️  Final error after all retry attempts:", fetchErr)
+			} else if health.WSHub != nil {
+				health.WSHub.BroadcastRefresh()
 			}
 
 			log.Println("═══════════════════════════════════════════════════════════")

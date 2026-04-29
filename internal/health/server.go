@@ -117,11 +117,16 @@ func (m *Monitor) GetStatus() Status {
 // from the website. Returns nil on success.
 type RefreshFunc func() error
 
+// WSHub is the global WebSocket hub for real-time updates.
+// It is initialized in StartServer and used by the dashboard.
+var WSHub *Hub
+
 // StartServer starts the local CMON dashboard server.
 //
 // Endpoints:
 //   - GET /: Returns the pending complaints dashboard
 //   - GET /data: Returns dashboard JSON data
+//   - GET /ws: WebSocket endpoint for real-time updates
 //
 // Server runs in background goroutine and doesn't block.
 //
@@ -132,8 +137,15 @@ type RefreshFunc func() error
 //   - stor: Complaint storage used by the complaints dashboard
 //   - refreshFn: Optional function to trigger a scrape cycle before returning data
 func StartServer(monitor *Monitor, port string, sc *session.Client, stor *storage.Storage, refreshFn RefreshFunc) {
+	WSHub = NewHub()
+	go WSHub.Run()
+
 	mux := http.NewServeMux()
 	registerComplaintDashboard(mux, monitor, sc, stor, refreshFn)
+
+	mux.HandleFunc("/ws", func(w http.ResponseWriter, r *http.Request) {
+		WSHub.ServeHTTP(w, r)
+	})
 
 	go func() {
 		// Bind only to loopback — the dashboard has no authentication.

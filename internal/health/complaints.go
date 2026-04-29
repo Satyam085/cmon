@@ -176,6 +176,21 @@ var complaintsPageTemplate = template.Must(template.New("complaints-page").Parse
       color: var(--text-dim);
       white-space: nowrap;
     }
+    .ws-status {
+      font-family: var(--font-mono);
+      font-size: 11px;
+      font-weight: 500;
+      padding: 4px 8px;
+      border-radius: 4px;
+    }
+    .ws-status.connected {
+      color: var(--success);
+      background: var(--success-dim);
+    }
+    .ws-status.disconnected {
+      color: var(--text-faint);
+      background: var(--surface-bright);
+    }
 
     /* ── Stats row ── */
     .stats-row {
@@ -776,6 +791,7 @@ var complaintsPageTemplate = template.Must(template.New("complaints-page").Parse
         <div id="statusChip" class="status-chip loading">Connecting</div>
       </div>
       <div class="topbar-right">
+        <span id="wsStatus" class="ws-status" style="display:none"></span>
         <span id="updatedAgo" class="updated-ago"></span>
       </div>
     </header>
@@ -796,11 +812,6 @@ var complaintsPageTemplate = template.Must(template.New("complaints-page").Parse
         <div class="stat-label">Last Fetch</div>
         <div class="stat-value" id="lastFetchTime" style="font-size:15px">—</div>
         <div class="stat-sub" id="fetchSub"></div>
-      </div>
-      <div class="stat-card">
-        <div class="stat-label">Uptime</div>
-        <div class="stat-value" id="uptime" style="font-size:15px">—</div>
-        <div class="stat-sub" id="uptimeSub"></div>
       </div>
     </section>
 
@@ -861,6 +872,76 @@ var complaintsPageTemplate = template.Must(template.New("complaints-page").Parse
   <script>
     (() => {
       const DATA_URL = {{.DataURL}};
+      const WS_URL = (location.protocol === "https:" ? "wss://" : "ws://") + location.host + "/ws";
+
+      // WebSocket connection
+      let ws = null;
+      let wsReconnectTimer = null;
+      let wsConnected = false;
+
+      function connectWS() {
+        if (ws && ws.readyState === WebSocket.OPEN) return;
+
+        try {
+          ws = new WebSocket(WS_URL);
+        } catch (e) {
+          console.error("WebSocket creation failed:", e);
+          scheduleReconnect();
+          return;
+        }
+
+        ws.onopen = () => {
+          console.log("📡 WebSocket connected");
+          wsConnected = true;
+          updateWSStatus(true);
+          if (wsReconnectTimer) { clearTimeout(wsReconnectTimer); wsReconnectTimer = null; }
+        };
+
+        ws.onmessage = (event) => {
+          try {
+            const msg = JSON.parse(event.data);
+            console.log("📥 WebSocket message:", msg);
+
+            if (msg.type === "refresh" || msg.type === "resolved") {
+              loadData({ silent: true });
+            }
+          } catch (e) {
+            console.error("Failed to parse WebSocket message:", e);
+          }
+        };
+
+        ws.onclose = () => {
+          console.log("📡 WebSocket disconnected");
+          wsConnected = false;
+          updateWSStatus(false);
+          scheduleReconnect();
+        };
+
+        ws.onerror = (err) => {
+          console.error("WebSocket error:", err);
+        };
+      }
+
+      function scheduleReconnect() {
+        if (wsReconnectTimer) return;
+        const delay = Math.min(30000, 1000 * Math.pow(2, (connectWS.reconnectCount || 0)));
+        connectWS.reconnectCount = (connectWS.reconnectCount || 0) + 1;
+        console.log("📡 Scheduling reconnect in " + delay + "ms");
+        wsReconnectTimer = setTimeout(() => {
+          wsReconnectTimer = null;
+          connectWS();
+        }, delay);
+      }
+
+      function updateWSStatus(connected) {
+        const el = document.getElementById("wsStatus");
+        if (!el) return;
+        el.style.display = "";
+        el.className = "ws-status " + (connected ? "connected" : "disconnected");
+        el.textContent = connected ? "● Live" : "○ Reconnecting...";
+      }
+
+      connectWS();
 
       // DOM refs
       const $ = (id) => document.getElementById(id);
@@ -1020,8 +1101,6 @@ var complaintsPageTemplate = template.Must(template.New("complaints-page").Parse
         $("groupSub").textContent = q ? "of " + payload.group_count + " total" : "active belts";
         setMetric("lastFetchTime", payload.status.last_fetch_time || "—");
         $("fetchSub").textContent = payload.status.last_fetch_status || "";
-        setMetric("uptime", payload.status.uptime || "—");
-        $("uptimeSub").textContent = payload.status.status === "healthy" ? "all systems go" : "needs attention";
 
         // Search count
         if (q) {
@@ -1336,6 +1415,10 @@ func registerComplaintDashboard(mux *http.ServeMux, monitor *Monitor, sc *sessio
 			log.Printf("⚠️  Dashboard resolve failed for %s: %v", req.ComplaintID, err)
 			writeJSONError(w, http.StatusBadGateway, err.Error())
 			return
+		}
+
+		if WSHub != nil {
+			WSHub.BroadcastResolved(req.ComplaintID)
 		}
 
 		w.Header().Set("Content-Type", "application/json")
