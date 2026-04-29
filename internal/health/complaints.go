@@ -176,6 +176,45 @@ var complaintsPageTemplate = template.Must(template.New("complaints-page").Parse
       color: var(--text-dim);
       white-space: nowrap;
     }
+
+    /* Stats row */
+    .stats-row {
+      display: grid;
+      grid-template-columns: repeat(2, 1fr);
+      gap: 12px;
+      margin-bottom: 16px;
+    }
+    .stat-card {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      padding: 14px 16px;
+      transition: border-color 0.2s, box-shadow 0.2s;
+      box-shadow: 0 1px 4px var(--shadow);
+    }
+    .stat-card:hover { border-color: var(--border-bright); box-shadow: 0 2px 8px var(--shadow); }
+    .stat-label {
+      font-size: 11px;
+      font-weight: 600;
+      text-transform: uppercase;
+      letter-spacing: 0.08em;
+      color: var(--text-dim);
+      margin-bottom: 4px;
+    }
+    .stat-value {
+      font-family: var(--font-mono);
+      font-size: 28px;
+      font-weight: 700;
+      color: var(--text);
+      line-height: 1.1;
+    }
+    .stat-value.accent { color: var(--accent); }
+    .stat-sub {
+      font-size: 11px;
+      color: var(--text-faint);
+      margin-top: 2px;
+    }
+
     .ws-status {
       font-family: var(--font-mono);
       font-size: 11px;
