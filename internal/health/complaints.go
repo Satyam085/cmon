@@ -251,7 +251,7 @@ var complaintsPageTemplate = template.Must(template.New("complaints-page").Parse
       border-radius: 6px;
       background: var(--surface);
       font-family: var(--font-sans);
-      font-size: 13px;
+      font-size: 14px;
       color: var(--text);
       outline: none;
       transition: border-color 0.2s, box-shadow 0.2s;
@@ -276,7 +276,7 @@ var complaintsPageTemplate = template.Must(template.New("complaints-page").Parse
       top: 50%;
       transform: translateY(-50%);
       font-family: var(--font-mono);
-      font-size: 11px;
+      font-size: 12px;
       color: var(--text-faint);
       background: var(--surface-bright);
       border: 1px solid var(--border);
@@ -286,7 +286,7 @@ var complaintsPageTemplate = template.Must(template.New("complaints-page").Parse
     }
     .search-count {
       font-family: var(--font-mono);
-      font-size: 11px;
+      font-size: 12px;
       color: var(--text-dim);
       white-space: nowrap;
     }
@@ -299,7 +299,7 @@ var complaintsPageTemplate = template.Must(template.New("complaints-page").Parse
       border-radius: 6px;
       background: var(--surface);
       font-family: var(--font-sans);
-      font-size: 12px;
+      font-size: 13px;
       font-weight: 500;
       color: var(--text-dim);
       cursor: pointer;
@@ -330,7 +330,7 @@ var complaintsPageTemplate = template.Must(template.New("complaints-page").Parse
       border-radius: 6px;
       background: var(--accent);
       font-family: var(--font-sans);
-      font-size: 12px;
+      font-size: 13px;
       font-weight: 600;
       color: #fff;
       cursor: pointer;
@@ -358,7 +358,7 @@ var complaintsPageTemplate = template.Must(template.New("complaints-page").Parse
       padding: 10px 14px;
       border-radius: 6px;
       margin-bottom: 16px;
-      font-size: 13px;
+      font-size: 14px;
       border: 1px solid;
     }
     .banner svg {
@@ -400,7 +400,7 @@ var complaintsPageTemplate = template.Must(template.New("complaints-page").Parse
       margin-bottom: 10px;
     }
     .dist-bar-title {
-      font-size: 11px;
+      font-size: 12px;
       font-weight: 600;
       text-transform: uppercase;
       letter-spacing: 0.08em;
@@ -428,7 +428,7 @@ var complaintsPageTemplate = template.Must(template.New("complaints-page").Parse
       display: inline-flex;
       align-items: center;
       gap: 5px;
-      font-size: 11px;
+      font-size: 12px;
       color: var(--text-dim);
     }
     .dist-legend-dot {
@@ -478,12 +478,12 @@ var complaintsPageTemplate = template.Must(template.New("complaints-page").Parse
     }
     .group-name {
       font-weight: 600;
-      font-size: 13px;
+      font-size: 14px;
       color: var(--text);
     }
     .group-badge {
       font-family: var(--font-mono);
-      font-size: 11px;
+      font-size: 12px;
       font-weight: 600;
       padding: 2px 8px;
       border-radius: 10px;
@@ -513,7 +513,7 @@ var complaintsPageTemplate = template.Must(template.New("complaints-page").Parse
       border-bottom: 1px solid var(--border);
     }
     th {
-      font-size: 10px;
+      font-size: 11px;
       font-weight: 600;
       text-transform: uppercase;
       letter-spacing: 0.06em;
@@ -523,7 +523,7 @@ var complaintsPageTemplate = template.Must(template.New("complaints-page").Parse
       top: 0;
     }
     td { color: var(--text); vertical-align: top; }
-    .mono { font-family: var(--font-mono); font-size: 11px; }
+    .mono { font-family: var(--font-mono); font-size: 12px; }
     .desc-cell { max-width: 200px; word-break: break-word; }
     tr:hover td { background: var(--surface-raised); }
 
@@ -541,7 +541,7 @@ var complaintsPageTemplate = template.Must(template.New("complaints-page").Parse
       border-radius: 4px;
       background: var(--success-dim);
       font-family: var(--font-sans);
-      font-size: 11px;
+      font-size: 12px;
       font-weight: 600;
       color: var(--success);
       cursor: pointer;
