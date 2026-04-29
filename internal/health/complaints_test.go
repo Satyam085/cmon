@@ -52,7 +52,7 @@ func TestDashboardRoutes(t *testing.T) {
 		if body == "" {
 			t.Fatal("GET / returned empty body")
 		}
-		if !strings.Contains(body, `const dataUrl = "/data";`) {
+		if !strings.Contains(body, `const DATA_URL = "/data";`) {
 			t.Fatalf("dashboard page did not embed expected data URL, body was: %s", body)
 		}
 	})
