@@ -693,6 +693,74 @@ var complaintsPageTemplate = template.Must(template.New("complaints-page").Parse
       font-size: 13px;
     }
 
+    /* ── Mobile responsive ── */
+    @media (max-width: 768px) {
+      .shell { padding: 12px 12px 40px; }
+
+      .topbar {
+        flex-wrap: wrap;
+        gap: 8px;
+        padding-bottom: 12px;
+        margin-bottom: 12px;
+      }
+      .topbar-right { width: 100%; justify-content: flex-end; }
+
+      .stats-row { grid-template-columns: 1fr; gap: 8px; margin-bottom: 12px; }
+      .stat-value { font-size: 24px; }
+
+      .toolbar {
+        flex-direction: column;
+        align-items: stretch;
+        gap: 8px;
+      }
+      .search-box { flex: 1 1 auto; min-width: 0; }
+      .toolbar .tool-btn, .toolbar .refresh-btn {
+        width: 100%;
+        justify-content: center;
+        margin-left: 0;
+      }
+
+      .group-header { padding: 10px 12px; }
+      .group-name { font-size: 13px; }
+
+      /* Card-based table layout */
+      .tbl-wrap { overflow: visible; }
+      table, thead, tbody, th, td, tr { display: block; }
+      thead { display: none; }
+
+      tbody tr {
+        background: var(--surface);
+        border: 1px solid var(--border);
+        border-radius: 6px;
+        margin: 8px 12px;
+        padding: 10px 14px;
+      }
+      tbody tr:hover { background: var(--surface-raised); }
+      tbody tr:hover td { background: transparent; }
+
+      td {
+        display: flex;
+        justify-content: space-between;
+        align-items: baseline;
+        padding: 4px 0;
+        border-bottom: 1px solid var(--border);
+        text-align: right;
+      }
+      td:last-child { border-bottom: none; }
+      td::before {
+        content: attr(data-label);
+        font-weight: 600;
+        font-size: 11px;
+        text-transform: uppercase;
+        letter-spacing: 0.04em;
+        color: var(--text-dim);
+        text-align: left;
+        margin-right: 12px;
+        flex-shrink: 0;
+      }
+      .desc-cell { max-width: none; text-align: right; }
+    }
+
     /* Print styles */
     @media print {
       * { transition: none !important; animation: none !important; }
