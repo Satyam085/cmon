@@ -50,29 +50,54 @@ var complaintsPageTemplate = template.Must(template.New("complaints-page").Parse
   <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;700&family=DM+Sans:wght@400;500;600;700&display=swap" rel="stylesheet">
   <style>
     :root {
-      --bg: #f0ede8;
-      --surface: #faf9f7;
-      --surface-raised: #f5f3ef;
-      --surface-bright: #ede9e3;
-      --border: rgba(60,55,45,0.10);
-      --border-bright: rgba(60,55,45,0.18);
-      --text: #1e2130;
-      --text-dim: #5a6075;
-      --text-faint: #96a0b0;
-      --accent: #2563eb;
-      --accent-dim: rgba(37,99,235,0.10);
+      /* Surfaces — refined warm-paper */
+      --bg: #f1ede4;
+      --surface: #ffffff;
+      --surface-raised: #fbf8f2;
+      --surface-bright: #ece6d8;
+      --surface-deep: #e3ddcd;
+
+      /* Borders */
+      --border: rgba(40,32,20,0.09);
+      --border-bright: rgba(40,32,20,0.16);
+      --border-strong: rgba(40,32,20,0.28);
+
+      /* Text */
+      --text: #14181f;
+      --text-2: #2f3742;
+      --text-dim: #5b6472;
+      --text-faint: #8b95a5;
+
+      /* Accents */
+      --accent: #1f5fe8;
+      --accent-hover: #1648c9;
+      --accent-dim: rgba(31,95,232,0.10);
+      --accent-soft: rgba(31,95,232,0.05);
+
       --danger: #dc2626;
       --danger-dim: rgba(220,38,38,0.09);
-      --success: #16a34a;
-      --success-dim: rgba(22,163,74,0.10);
+      --success: #15803d;
+      --success-dim: rgba(21,128,61,0.10);
       --warn: #b45309;
-      --shadow: rgba(30,33,48,0.07);
-      --font-mono: 'JetBrains Mono', 'Fira Code', 'SF Mono', monospace;
-      --font-sans: 'DM Sans', -apple-system, sans-serif;
+
+      /* Shadows */
+      --shadow-sm: 0 1px 2px rgba(20,16,8,0.04);
+      --shadow-md: 0 1px 3px rgba(20,16,8,0.06), 0 1px 2px rgba(20,16,8,0.03);
+      --shadow-lg: 0 6px 24px rgba(20,16,8,0.07), 0 1px 3px rgba(20,16,8,0.04);
+
+      /* Type */
+      --font-mono: 'JetBrains Mono', 'SF Mono', 'Roboto Mono', monospace;
+      --font-sans: 'DM Sans', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+
+      /* Radii */
+      --r-xs: 4px;
+      --r-sm: 6px;
+      --r-md: 8px;
+      --r-lg: 12px;
     }
 
-    *,*::before,*::after{box-sizing:border-box}
-    html{scroll-behavior:smooth;-webkit-font-smoothing:antialiased}
+    *,*::before,*::after { box-sizing: border-box; }
+    html { scroll-behavior: smooth; -webkit-font-smoothing: antialiased; -moz-osx-font-smoothing: grayscale; }
 
     body {
       margin: 0;
@@ -91,16 +116,16 @@ var complaintsPageTemplate = template.Must(template.New("complaints-page").Parse
       inset: 0;
       z-index: 9999;
       pointer-events: none;
-      opacity: 0.04;
+      opacity: 0.035;
       background-image: url("data:image/svg+xml,%3Csvg viewBox='0 0 256 256' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.75' numOctaves='4' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)'/%3E%3C/svg%3E");
-      background-size: 180px;
+      background-size: 200px;
     }
 
     /* ── Shell ── */
     .shell {
-      max-width: 1480px;
+      max-width: 1400px;
       margin: 0 auto;
-      padding: 20px 24px 60px;
+      padding: 24px 28px 64px;
     }
 
     /* ── Top bar ── */
@@ -109,9 +134,9 @@ var complaintsPageTemplate = template.Must(template.New("complaints-page").Parse
       align-items: center;
       justify-content: space-between;
       gap: 16px;
-      padding-bottom: 20px;
+      padding: 4px 0 20px;
       border-bottom: 1px solid var(--border);
-      margin-bottom: 20px;
+      margin-bottom: 24px;
     }
     .topbar-left {
       display: flex;
@@ -122,36 +147,41 @@ var complaintsPageTemplate = template.Must(template.New("complaints-page").Parse
     .logo {
       font-family: var(--font-mono);
       font-weight: 700;
-      font-size: 15px;
+      font-size: 16px;
       letter-spacing: -0.02em;
       color: var(--text);
       white-space: nowrap;
     }
     .logo span { color: var(--accent); }
+
     .status-chip {
       display: inline-flex;
       align-items: center;
       gap: 6px;
-      padding: 4px 10px;
-      border-radius: 4px;
+      padding: 5px 11px;
+      border-radius: 999px;
       font-family: var(--font-mono);
-      font-size: 11px;
-      font-weight: 500;
+      font-size: 10.5px;
+      font-weight: 600;
       text-transform: uppercase;
-      letter-spacing: 0.06em;
+      letter-spacing: 0.08em;
       white-space: nowrap;
+      border: 1px solid transparent;
     }
     .status-chip.healthy {
       background: var(--success-dim);
       color: var(--success);
+      border-color: rgba(21,128,61,0.18);
     }
     .status-chip.unhealthy {
       background: var(--danger-dim);
       color: var(--danger);
+      border-color: rgba(220,38,38,0.18);
     }
     .status-chip.loading {
       background: var(--accent-dim);
       color: var(--accent);
+      border-color: rgba(31,95,232,0.18);
     }
     .status-chip::before {
       content: "";
@@ -160,9 +190,7 @@ var complaintsPageTemplate = template.Must(template.New("complaints-page").Parse
       background: currentColor;
       animation: pulse-dot 2s ease-in-out infinite;
     }
-    @keyframes pulse-dot {
-      0%,100%{opacity:1}50%{opacity:0.3}
-    }
+    @keyframes pulse-dot { 0%,100%{opacity:1} 50%{opacity:0.35} }
 
     .topbar-right {
       display: flex;
@@ -176,8 +204,26 @@ var complaintsPageTemplate = template.Must(template.New("complaints-page").Parse
       color: var(--text-dim);
       white-space: nowrap;
     }
+    .ws-status {
+      font-family: var(--font-mono);
+      font-size: 10.5px;
+      font-weight: 500;
+      padding: 4px 10px;
+      border-radius: 999px;
+      border: 1px solid transparent;
+    }
+    .ws-status.connected {
+      color: var(--success);
+      background: var(--success-dim);
+      border-color: rgba(21,128,61,0.18);
+    }
+    .ws-status.disconnected {
+      color: var(--text-faint);
+      background: var(--surface-bright);
+      border-color: var(--border-bright);
+    }
 
-    /* Stats row */
+    /* ── Stats ── */
     .stats-row {
       display: grid;
       grid-template-columns: repeat(2, 1fr);
@@ -185,50 +231,40 @@ var complaintsPageTemplate = template.Must(template.New("complaints-page").Parse
       margin-bottom: 16px;
     }
     .stat-card {
+      position: relative;
       background: var(--surface);
       border: 1px solid var(--border);
-      border-radius: 6px;
-      padding: 14px 16px;
+      border-radius: var(--r-md);
+      padding: 16px 18px;
       transition: border-color 0.2s, box-shadow 0.2s;
-      box-shadow: 0 1px 4px var(--shadow);
+      box-shadow: var(--shadow-sm);
+      overflow: hidden;
     }
-    .stat-card:hover { border-color: var(--border-bright); box-shadow: 0 2px 8px var(--shadow); }
+    .stat-card:hover {
+      border-color: var(--border-bright);
+      box-shadow: var(--shadow-md);
+    }
     .stat-label {
-      font-size: 11px;
+      font-size: 10.5px;
       font-weight: 600;
       text-transform: uppercase;
-      letter-spacing: 0.08em;
+      letter-spacing: 0.1em;
       color: var(--text-dim);
-      margin-bottom: 4px;
+      margin-bottom: 8px;
     }
     .stat-value {
       font-family: var(--font-mono);
-      font-size: 28px;
-      font-weight: 700;
+      font-size: 32px;
+      font-weight: 600;
       color: var(--text);
-      line-height: 1.1;
+      line-height: 1;
+      letter-spacing: -0.02em;
     }
     .stat-value.accent { color: var(--accent); }
     .stat-sub {
-      font-size: 11px;
+      font-size: 11.5px;
       color: var(--text-faint);
-      margin-top: 2px;
-    }
-
-    .ws-status {
-      font-family: var(--font-mono);
-      font-size: 11px;
-      font-weight: 500;
-      padding: 4px 8px;
-      border-radius: 4px;
-    }
-    .ws-status.connected {
-      color: var(--success);
-      background: var(--success-dim);
-    }
-.ws-status.disconnected {
-      color: var(--text-faint);
-      background: var(--surface-bright);
+      margin-top: 6px;
     }
 
     /* ── Toolbar ── */
@@ -241,28 +277,31 @@ var complaintsPageTemplate = template.Must(template.New("complaints-page").Parse
     }
     .search-box {
       position: relative;
-      flex: 1 1 240px;
-      min-width: 180px;
+      flex: 1 1 280px;
+      min-width: 200px;
     }
     .search-box input {
       width: 100%;
-      padding: 8px 12px 8px 36px;
+      padding: 9px 12px 9px 38px;
       border: 1px solid var(--border);
-      border-radius: 6px;
+      border-radius: var(--r-md);
       background: var(--surface);
       font-family: var(--font-sans);
       font-size: 14px;
       color: var(--text);
       outline: none;
-      transition: border-color 0.2s, box-shadow 0.2s;
+      transition: border-color 0.15s, box-shadow 0.15s;
+      box-shadow: var(--shadow-sm);
     }
+    .search-box input:hover { border-color: var(--border-bright); }
     .search-box input:focus {
       border-color: var(--accent);
       box-shadow: 0 0 0 3px var(--accent-dim);
     }
+    .search-box input::placeholder { color: var(--text-faint); }
     .search-icon {
       position: absolute;
-      left: 10px;
+      left: 12px;
       top: 50%;
       transform: translateY(-50%);
       width: 16px;
@@ -276,11 +315,12 @@ var complaintsPageTemplate = template.Must(template.New("complaints-page").Parse
       top: 50%;
       transform: translateY(-50%);
       font-family: var(--font-mono);
-      font-size: 12px;
-      color: var(--text-faint);
+      font-size: 11px;
+      font-weight: 500;
+      color: var(--text-dim);
       background: var(--surface-bright);
-      border: 1px solid var(--border);
-      border-radius: 4px;
+      border: 1px solid var(--border-bright);
+      border-radius: var(--r-xs);
       padding: 1px 6px;
       line-height: 1.4;
     }
@@ -293,18 +333,19 @@ var complaintsPageTemplate = template.Must(template.New("complaints-page").Parse
     .tool-btn {
       display: inline-flex;
       align-items: center;
-      gap: 6px;
-      padding: 7px 12px;
+      gap: 7px;
+      padding: 8px 13px;
       border: 1px solid var(--border);
-      border-radius: 6px;
+      border-radius: var(--r-md);
       background: var(--surface);
       font-family: var(--font-sans);
       font-size: 13px;
       font-weight: 500;
-      color: var(--text-dim);
+      color: var(--text-2);
       cursor: pointer;
-      transition: all 0.2s;
+      transition: all 0.15s;
       white-space: nowrap;
+      box-shadow: var(--shadow-sm);
     }
     .tool-btn:hover {
       border-color: var(--border-bright);
@@ -313,41 +354,32 @@ var complaintsPageTemplate = template.Must(template.New("complaints-page").Parse
     }
     .tool-btn.active {
       background: var(--accent-dim);
-      border-color: var(--accent);
+      border-color: rgba(31,95,232,0.3);
       color: var(--accent);
     }
-    .tool-btn svg {
-      width: 14px;
-      height: 14px;
-      flex-shrink: 0;
-    }
+    .tool-btn svg { width: 14px; height: 14px; flex-shrink: 0; }
     .refresh-btn {
       display: inline-flex;
       align-items: center;
-      gap: 6px;
-      padding: 7px 14px;
+      gap: 7px;
+      padding: 8px 16px;
       border: 1px solid var(--accent);
-      border-radius: 6px;
+      border-radius: var(--r-md);
       background: var(--accent);
       font-family: var(--font-sans);
       font-size: 13px;
       font-weight: 600;
       color: #fff;
       cursor: pointer;
-      transition: all 0.2s;
+      transition: all 0.15s;
       white-space: nowrap;
       margin-left: auto;
+      box-shadow: 0 1px 3px rgba(31,95,232,0.25);
     }
-    .refresh-btn:hover { opacity: 0.9; }
-    .refresh-btn:disabled { opacity: 0.5; cursor: not-allowed; }
-    .refresh-btn svg {
-      width: 14px;
-      height: 14px;
-      flex-shrink: 0;
-    }
-    .refresh-btn.is-loading svg {
-      animation: spin 1s linear infinite;
-    }
+    .refresh-btn:hover { background: var(--accent-hover); border-color: var(--accent-hover); }
+    .refresh-btn:disabled { opacity: 0.6; cursor: not-allowed; }
+    .refresh-btn svg { width: 14px; height: 14px; flex-shrink: 0; }
+    .refresh-btn.is-loading svg { animation: spin 1s linear infinite; }
     @keyframes spin { to { transform: rotate(360deg); } }
 
     /* ── Banner ── */
@@ -355,63 +387,49 @@ var complaintsPageTemplate = template.Must(template.New("complaints-page").Parse
       display: flex;
       align-items: center;
       gap: 10px;
-      padding: 10px 14px;
-      border-radius: 6px;
+      padding: 11px 14px;
+      border-radius: var(--r-md);
       margin-bottom: 16px;
-      font-size: 14px;
+      font-size: 13.5px;
       border: 1px solid;
+      box-shadow: var(--shadow-sm);
     }
-    .banner svg {
-      width: 18px;
-      height: 18px;
-      flex-shrink: 0;
-    }
-    .banner.info {
-      background: var(--accent-dim);
-      border-color: rgba(37,99,235,0.15);
-      color: var(--accent);
-    }
-    .banner.error {
-      background: var(--danger-dim);
-      border-color: rgba(220,38,38,0.15);
-      color: var(--danger);
-    }
-    .banner.success {
-      background: var(--success-dim);
-      border-color: rgba(22,163,74,0.15);
-      color: var(--success);
-    }
-    .banner-text { color: var(--text); }
-    .banner-text strong { font-weight: 600; }
+    .banner svg { width: 18px; height: 18px; flex-shrink: 0; }
+    .banner.info { background: var(--accent-soft); border-color: rgba(31,95,232,0.15); color: var(--accent); }
+    .banner.error { background: var(--danger-dim); border-color: rgba(220,38,38,0.18); color: var(--danger); }
+    .banner.success { background: var(--success-dim); border-color: rgba(21,128,61,0.18); color: var(--success); }
+    .banner-text { color: var(--text-2); flex: 1; }
+    .banner-text strong { font-weight: 600; color: var(--text); }
 
     /* ── Distribution bar ── */
     .dist-bar-wrap {
       background: var(--surface);
       border: 1px solid var(--border);
-      border-radius: 6px;
-      padding: 14px 16px;
+      border-radius: var(--r-md);
+      padding: 14px 18px;
       margin-bottom: 16px;
-      box-shadow: 0 1px 4px var(--shadow);
+      box-shadow: var(--shadow-sm);
     }
     .dist-bar-header {
       display: flex;
       align-items: center;
       justify-content: space-between;
-      margin-bottom: 10px;
+      margin-bottom: 12px;
     }
     .dist-bar-title {
-      font-size: 12px;
+      font-size: 11px;
       font-weight: 600;
       text-transform: uppercase;
-      letter-spacing: 0.08em;
+      letter-spacing: 0.1em;
       color: var(--text-dim);
     }
     .dist-bar {
       display: flex;
       height: 8px;
-      border-radius: 4px;
+      border-radius: var(--r-xs);
       overflow: hidden;
       gap: 2px;
+      background: var(--surface-bright);
     }
     .dist-seg {
       border-radius: 2px;
@@ -421,14 +439,14 @@ var complaintsPageTemplate = template.Must(template.New("complaints-page").Parse
     .dist-legend {
       display: flex;
       flex-wrap: wrap;
-      gap: 12px;
-      margin-top: 10px;
+      gap: 12px 18px;
+      margin-top: 12px;
     }
     .dist-legend-item {
       display: inline-flex;
       align-items: center;
-      gap: 5px;
-      font-size: 12px;
+      gap: 6px;
+      font-size: 12.5px;
       color: var(--text-dim);
     }
     .dist-legend-dot {
@@ -444,21 +462,21 @@ var complaintsPageTemplate = template.Must(template.New("complaints-page").Parse
     }
 
     /* ── Groups ── */
-    .groups { display: flex; flex-direction: column; gap: 12px; }
+    .groups { display: flex; flex-direction: column; gap: 14px; }
     .group {
       background: var(--surface);
       border: 1px solid var(--border);
-      border-radius: 6px;
+      border-radius: var(--r-md);
       overflow: hidden;
-      box-shadow: 0 1px 4px var(--shadow);
-      transition: border-color 0.2s;
+      box-shadow: var(--shadow-sm);
+      transition: border-color 0.15s, box-shadow 0.15s;
     }
-    .group:hover { border-color: var(--border-bright); }
+    .group:hover { border-color: var(--border-bright); box-shadow: var(--shadow-md); }
     .group-header {
       display: flex;
       align-items: center;
       justify-content: space-between;
-      padding: 12px 16px;
+      padding: 14px 18px;
       cursor: pointer;
       user-select: none;
       transition: background 0.15s;
@@ -467,26 +485,28 @@ var complaintsPageTemplate = template.Must(template.New("complaints-page").Parse
     .group-header-left {
       display: flex;
       align-items: center;
-      gap: 10px;
+      gap: 12px;
     }
     .group-indicator {
       width: 10px;
       height: 10px;
       border-radius: 50%;
       flex-shrink: 0;
-      box-shadow: 0 0 6px var(--glow-color, transparent);
+      box-shadow: 0 0 0 3px var(--surface), 0 0 8px var(--glow-color, transparent);
     }
     .group-name {
       font-weight: 600;
-      font-size: 14px;
+      font-size: 14.5px;
       color: var(--text);
+      letter-spacing: -0.005em;
     }
     .group-badge {
       font-family: var(--font-mono);
       font-size: 12px;
       font-weight: 600;
-      padding: 2px 8px;
-      border-radius: 10px;
+      padding: 3px 9px;
+      border-radius: 999px;
+      letter-spacing: 0.02em;
     }
     .group-chevron {
       width: 16px;
@@ -496,71 +516,76 @@ var complaintsPageTemplate = template.Must(template.New("complaints-page").Parse
       flex-shrink: 0;
     }
     .group.collapsed .group-chevron { transform: rotate(-90deg); }
-    .group-body {
-      border-top: 1px solid var(--border);
-    }
+    .group-body { border-top: 1px solid var(--border); }
     .group.collapsed .group-body { display: none; }
 
     /* ── Table ── */
-    .tbl-wrap { overflow: visible; }
+    .tbl-wrap { overflow-x: auto; }
     table {
       width: 100%;
+      min-width: 1080px;
       border-collapse: collapse;
+      table-layout: fixed;
     }
+    body.show-debug table { min-width: 1260px; }
     th, td {
-      padding: 8px 12px;
+      padding: 11px 14px;
       text-align: left;
       border-bottom: 1px solid var(--border);
+      overflow-wrap: anywhere;
+      word-break: break-word;
     }
     th {
-      font-size: 11px;
+      font-size: 10.5px;
       font-weight: 600;
       text-transform: uppercase;
-      letter-spacing: 0.06em;
+      letter-spacing: 0.08em;
       color: var(--text-dim);
       background: var(--surface-raised);
       position: sticky;
       top: 0;
+      white-space: nowrap;
     }
-    td { color: var(--text); vertical-align: top; }
-    .mono { font-family: var(--font-mono); font-size: 12px; }
-    .desc-cell { max-width: 200px; word-break: break-word; }
+    td {
+      color: var(--text-2);
+      vertical-align: top;
+      font-size: 13px;
+      line-height: 1.45;
+    }
+    tbody tr:last-child td { border-bottom: none; }
+    .mono { font-family: var(--font-mono); font-size: 12px; color: var(--text); }
+    .desc-cell { word-break: break-word; }
     tr:hover td { background: var(--surface-raised); }
 
     /* ── Debug columns — hidden by default ── */
     .debug-col { display: none; }
     body.show-debug .debug-col { display: table-cell; }
+    body.show-debug col.debug-col { display: table-column; }
 
     /* ── Resolve button ── */
     .resolve-btn {
       display: inline-flex;
       align-items: center;
-      gap: 4px;
-      padding: 4px 10px;
-      border: 1px solid var(--success);
-      border-radius: 4px;
+      gap: 5px;
+      padding: 5px 11px;
+      border: 1px solid rgba(21,128,61,0.3);
+      border-radius: var(--r-sm);
       background: var(--success-dim);
       font-family: var(--font-sans);
       font-size: 12px;
       font-weight: 600;
       color: var(--success);
       cursor: pointer;
-      transition: all 0.2s;
+      transition: all 0.15s;
       white-space: nowrap;
     }
     .resolve-btn:hover {
       background: var(--success);
       color: #fff;
+      border-color: var(--success);
     }
-    .resolve-btn:disabled {
-      opacity: 0.5;
-      cursor: not-allowed;
-    }
-    .resolve-btn svg {
-      width: 14px;
-      height: 14px;
-      flex-shrink: 0;
-    }
+    .resolve-btn:disabled { opacity: 0.5; cursor: not-allowed; }
+    .resolve-btn svg { width: 13px; height: 13px; flex-shrink: 0; }
 
     /* ── Modal ── */
     .modal-backdrop {
@@ -568,59 +593,59 @@ var complaintsPageTemplate = template.Must(template.New("complaints-page").Parse
       position: fixed;
       inset: 0;
       z-index: 10000;
-      background: rgba(0,0,0,0.4);
-      backdrop-filter: blur(4px);
+      background: rgba(20,20,30,0.4);
+      backdrop-filter: blur(6px);
       align-items: center;
       justify-content: center;
+      padding: 16px;
     }
-    .modal-backdrop.open {
-      display: flex;
-    }
+    .modal-backdrop.open { display: flex; }
     .modal {
       background: var(--surface);
       border: 1px solid var(--border);
-      border-radius: 10px;
+      border-radius: var(--r-lg);
       padding: 24px;
       width: 100%;
-      max-width: 420px;
-      box-shadow: 0 8px 32px rgba(0,0,0,0.18);
+      max-width: 440px;
+      box-shadow: 0 16px 48px rgba(20,16,8,0.18);
       animation: modal-in 0.2s ease-out;
     }
     @keyframes modal-in {
-      from { opacity: 0; transform: scale(0.95) translateY(8px); }
+      from { opacity: 0; transform: scale(0.96) translateY(8px); }
       to { opacity: 1; transform: scale(1) translateY(0); }
     }
     .modal-title {
-      font-size: 16px;
+      font-size: 17px;
       font-weight: 700;
       color: var(--text);
       margin-bottom: 4px;
+      letter-spacing: -0.01em;
     }
     .modal-sub {
       font-size: 13px;
       color: var(--text-dim);
-      margin-bottom: 16px;
+      margin-bottom: 18px;
     }
     .modal-label {
       font-size: 11px;
       font-weight: 600;
       text-transform: uppercase;
-      letter-spacing: 0.06em;
+      letter-spacing: 0.08em;
       color: var(--text-dim);
       margin-bottom: 6px;
     }
     .modal-textarea {
       width: 100%;
-      padding: 8px 12px;
+      padding: 10px 12px;
       border: 1px solid var(--border);
-      border-radius: 6px;
+      border-radius: var(--r-sm);
       background: var(--bg);
       font-family: var(--font-sans);
       font-size: 13px;
       color: var(--text);
       resize: vertical;
       outline: none;
-      transition: border-color 0.2s;
+      transition: border-color 0.15s, box-shadow 0.15s;
     }
     .modal-textarea:focus {
       border-color: var(--accent);
@@ -630,25 +655,25 @@ var complaintsPageTemplate = template.Must(template.New("complaints-page").Parse
       display: flex;
       justify-content: flex-end;
       gap: 8px;
-      margin-top: 16px;
+      margin-top: 18px;
     }
     .modal-cancel {
-      padding: 7px 14px;
+      padding: 8px 14px;
       border: 1px solid var(--border);
-      border-radius: 6px;
+      border-radius: var(--r-sm);
       background: var(--surface);
       font-family: var(--font-sans);
       font-size: 13px;
       font-weight: 500;
-      color: var(--text-dim);
+      color: var(--text-2);
       cursor: pointer;
       transition: all 0.15s;
     }
     .modal-cancel:hover { background: var(--surface-raised); color: var(--text); }
     .modal-confirm {
-      padding: 7px 14px;
+      padding: 8px 14px;
       border: 1px solid var(--success);
-      border-radius: 6px;
+      border-radius: var(--r-sm);
       background: var(--success);
       font-family: var(--font-sans);
       font-size: 13px;
@@ -677,186 +702,332 @@ var complaintsPageTemplate = template.Must(template.New("complaints-page").Parse
       display: flex;
       flex-direction: column;
       align-items: center;
-      gap: 6px;
-      padding: 48px 24px;
+      gap: 8px;
+      padding: 56px 24px;
       text-align: center;
       color: var(--text-dim);
       font-size: 14px;
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: var(--r-md);
+      box-shadow: var(--shadow-sm);
     }
-    .empty-state strong { color: var(--text); font-size: 15px; }
+    .empty-state strong { color: var(--text); font-size: 15px; font-weight: 600; }
     .error-box {
-      padding: 16px;
-      border-radius: 6px;
+      padding: 16px 18px;
+      border-radius: var(--r-md);
       background: var(--danger-dim);
-      border: 1px solid rgba(220,38,38,0.15);
+      border: 1px solid rgba(220,38,38,0.2);
       color: var(--danger);
       font-size: 13px;
     }
 
+    /* ── Print-only header (hidden on screen) ── */
+    .print-only-header { display: none; }
+
     /* ── Mobile responsive ── */
     @media (max-width: 768px) {
-      .shell { padding: 12px 12px 40px; }
+      .shell { padding: 14px 14px 32px; }
 
       .topbar {
         flex-wrap: wrap;
-        gap: 8px;
-        padding-bottom: 12px;
-        margin-bottom: 12px;
+        gap: 10px;
+        padding-bottom: 14px;
+        margin-bottom: 16px;
       }
-      .topbar-right { width: 100%; justify-content: flex-end; }
-
-      .stats-row { grid-template-columns: 1fr; gap: 8px; margin-bottom: 12px; }
-      .stat-value { font-size: 24px; }
-
-      .toolbar {
-        flex-direction: column;
-        align-items: stretch;
-        gap: 8px;
-      }
-      .search-box { flex: 1 1 auto; min-width: 0; }
-      .toolbar .tool-btn, .toolbar .refresh-btn {
+      .topbar-left { flex: 1 1 auto; }
+      .topbar-right {
         width: 100%;
+        justify-content: flex-end;
+        gap: 8px;
+      }
+
+      .stats-row {
+        grid-template-columns: 1fr 1fr;
+        gap: 8px;
+        margin-bottom: 14px;
+      }
+      .stat-card { padding: 12px 14px; }
+      .stat-value { font-size: 24px; }
+      .stat-label { font-size: 9.5px; letter-spacing: 0.08em; }
+      .stat-sub { font-size: 10.5px; margin-top: 4px; }
+
+      .toolbar { gap: 8px; }
+      .search-box { flex: 1 1 100%; min-width: 0; }
+      .search-count { width: 100%; order: 5; }
+      .tool-btn, .refresh-btn {
+        flex: 1 1 0;
         justify-content: center;
         margin-left: 0;
+        padding: 9px 12px;
       }
 
-      .group-header { padding: 10px 12px; }
-      .group-name { font-size: 13px; }
+      .dist-bar-wrap { padding: 12px 14px; }
+      .dist-legend { gap: 8px 14px; font-size: 12px; }
+
+      .group-header { padding: 12px 14px; }
+      .group-name { font-size: 13.5px; }
+      .group-badge { font-size: 11.5px; padding: 2px 8px; }
 
       /* Card-based table layout */
-      .tbl-wrap { overflow: visible; }
+      .tbl-wrap { overflow: visible; padding: 6px 10px 10px; }
       table, thead, tbody, th, td, tr { display: block; }
       thead { display: none; }
 
       tbody tr {
         background: var(--surface);
         border: 1px solid var(--border);
-        border-radius: 6px;
-        margin: 8px 12px;
-        padding: 10px 14px;
+        border-radius: var(--r-sm);
+        margin: 8px 0;
+        padding: 10px 12px 12px;
+        box-shadow: var(--shadow-sm);
       }
-      tbody tr:hover { background: var(--surface-raised); }
-      tbody tr:hover td { background: transparent; }
+      tbody tr:last-child td { border-bottom: 1px solid var(--border); }
+      tr:hover td { background: transparent; }
 
       td {
-        display: flex;
-        justify-content: space-between;
+        display: grid;
+        grid-template-columns: 80px 1fr;
+        column-gap: 12px;
         align-items: baseline;
-        padding: 4px 0;
+        padding: 6px 0;
         border-bottom: 1px solid var(--border);
-        text-align: right;
+        text-align: left;
+        font-size: 13px;
+        line-height: 1.45;
       }
       td:last-child { border-bottom: none; }
       td::before {
         content: attr(data-label);
         font-weight: 600;
-        font-size: 11px;
+        font-size: 10px;
         text-transform: uppercase;
-        letter-spacing: 0.04em;
+        letter-spacing: 0.08em;
         color: var(--text-dim);
-        text-align: left;
-        margin-right: 12px;
-        flex-shrink: 0;
+        line-height: 1.6;
       }
-      .desc-cell { max-width: none; text-align: right; }
+      .desc-cell {
+        max-width: none;
+        grid-template-columns: 1fr;
+        row-gap: 3px;
+      }
+      td[data-label="Address"] {
+        grid-template-columns: 1fr;
+        row-gap: 3px;
+      }
+      .action-col {
+        margin-top: 6px;
+        padding-top: 10px !important;
+        border-top: 1px dashed var(--border);
+        border-bottom: none !important;
+        display: block !important;
+      }
+      .action-col::before { display: none; }
+      .resolve-btn {
+        width: 100%;
+        justify-content: center;
+        padding: 8px 14px;
+        font-size: 13px;
+      }
+      .modal { padding: 20px; border-radius: var(--r-md); }
     }
 
-    /* Print styles */
+    @media (max-width: 420px) {
+      .stats-row { grid-template-columns: 1fr; }
+      .tool-btn, .refresh-btn { flex: 1 1 100%; }
+      .logo { font-size: 15px; }
+      .stat-value { font-size: 22px; }
+    }
+
+    /* ── Print styles ── */
+    @page { margin: 12mm 10mm 14mm; size: A4; }
+
     @media print {
       * { transition: none !important; animation: none !important; }
-      body { background: white !important; color: #000 !important; font-size: 11px; }
+      html, body {
+        background: #fff !important;
+        color: #000 !important;
+        font-family: 'Georgia', 'Times New Roman', serif;
+        font-size: 10pt;
+        line-height: 1.4;
+      }
       body::before { display: none !important; }
 
-      .shell { max-width: 100%; padding: 8px 0 0; margin: 0; }
+      .shell { max-width: 100%; padding: 0; margin: 0; }
 
-      /* Hide non-print elements */
+      /* Hide UI chrome */
       .topbar, .stats-row, .toolbar, .banner, .dist-bar-wrap, .ws-status,
       #resolveModal, .empty-state, .search-count, .search-kbd,
       .debug-col, .complaint-col, .action-col,
       .resolve-btn, .group-chevron { display: none !important; }
 
-      /* Title */
-      .groups::before {
-        content: "CMON \2014  Pending Complaints";
-        display: block;
-        font-size: 15px;
-        font-weight: 700;
-        margin-bottom: 10px;
-        padding-bottom: 6px;
+      /* Print header */
+      .print-only-header {
+        display: block !important;
         border-bottom: 2px solid #000;
+        padding-bottom: 6pt;
+        margin-bottom: 10pt;
+      }
+      .print-brand {
+        font-family: 'Georgia', serif;
+        font-size: 16pt;
+        font-weight: 700;
+        letter-spacing: -0.01em;
+        color: #000;
+      }
+      .print-sub {
+        font-size: 8.5pt;
+        color: #555;
+        font-style: italic;
+        margin-top: 1pt;
+      }
+      .print-meta {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 16pt;
+        font-size: 9pt;
+        color: #333;
+        margin-top: 6pt;
+      }
+      .print-meta strong { color: #000; font-weight: 700; }
+      .print-meta-label {
+        text-transform: uppercase;
+        letter-spacing: 0.06em;
+        font-size: 7.5pt;
+        color: #777;
+        font-family: 'Helvetica', sans-serif;
+        margin-right: 2pt;
       }
 
       /* Groups */
       .groups { display: block; }
       .group {
-        break-inside: avoid; page-break-inside: avoid;
-        margin-bottom: 20px;
-        padding-bottom: 16px;
-        border: none;
-        border-bottom: 2px dashed #999;
+        break-inside: avoid;
+        page-break-inside: avoid;
+        margin-bottom: 14pt;
+        border: none !important;
         border-radius: 0 !important;
         overflow: visible !important;
         box-shadow: none !important;
+        background: transparent !important;
       }
-      .group:last-child {
-        border-bottom: none;
-        margin-bottom: 0;
-        padding-bottom: 0;
-      }
+      .group:last-child { margin-bottom: 0; }
       .group-header {
-        background: #eee !important;
-        padding: 6px 10px;
-        border-bottom: 1px solid #999;
+        display: flex !important;
+        background: #f0eee9 !important;
+        padding: 5pt 8pt !important;
+        border: 1px solid #000 !important;
+        border-bottom: none !important;
         border-radius: 0 !important;
+        cursor: default !important;
+        print-color-adjust: exact;
+        -webkit-print-color-adjust: exact;
       }
+      .group-header-left { gap: 6pt; display: flex; align-items: center; }
       .group-indicator {
-        width: 8px; height: 8px;
+        width: 9pt; height: 9pt;
         border-radius: 50%;
         display: inline-block;
-        margin-right: 6px;
         box-shadow: none !important;
-        print-color-adjust: exact; -webkit-print-color-adjust: exact;
+        border: 1px solid #000;
+        print-color-adjust: exact;
+        -webkit-print-color-adjust: exact;
       }
-      .group-name { font-weight: 700; font-size: 12px; color: #000; }
+      .group-name {
+        font-family: 'Georgia', serif;
+        font-weight: 700;
+        font-size: 11pt;
+        color: #000;
+      }
       .group-badge {
-        font-size: 11px; padding: 1px 6px;
-        border-radius: 8px; border: 1px solid #999;
-        background: transparent !important; color: #000 !important;
+        font-family: 'Helvetica', sans-serif;
+        font-size: 8.5pt;
+        font-weight: 700;
+        padding: 1pt 6pt;
+        border-radius: 8pt;
+        border: 1px solid #000;
+        background: #fff !important;
+        color: #000 !important;
       }
       .group-body { display: block !important; border-top: none !important; }
       .group.collapsed .group-body { display: block !important; }
 
-      /* Table */
-      .tbl-wrap { overflow: visible !important; }
-      table { width: 100%; border-collapse: collapse; font-size: 10px; }
+      /* Table — restore table layout (override mobile cards) */
+      .tbl-wrap { overflow: visible !important; padding: 0 !important; }
+      table {
+        display: table !important;
+        width: 100% !important;
+        min-width: 0 !important;
+        border-collapse: collapse;
+        table-layout: fixed !important;
+        font-size: 8.5pt;
+        border: 1px solid #000;
+        border-top: none;
+      }
+      colgroup { display: table-column-group !important; }
+
+      /* Print column widths (visible: Name, Consumer, Mobile, Address, Area, Description, Date) */
+      colgroup col:nth-child(1) { width: 0 !important; }   /* Complaint — hidden */
+      colgroup col:nth-child(2) { width: 13% !important; } /* Name */
+      colgroup col:nth-child(3) { width: 11% !important; } /* Consumer */
+      colgroup col:nth-child(4) { width: 11% !important; } /* Mobile */
+      colgroup col:nth-child(5) { width: 21% !important; } /* Address */
+      colgroup col:nth-child(6) { width: 13% !important; } /* Area */
+      colgroup col:nth-child(7) { width: 19% !important; } /* Description */
+      colgroup col:nth-child(8) { width: 12% !important; } /* Date */
+      colgroup col:nth-child(9),
+      colgroup col:nth-child(10),
+      colgroup col:nth-child(11) { width: 0 !important; }  /* Telegram, WhatsApp, Action — hidden */
+
+      thead { display: table-header-group !important; }
+      tbody { display: table-row-group !important; }
+      tr { display: table-row !important; box-shadow: none !important; background: transparent !important; border: none !important; margin: 0 !important; padding: 0 !important; border-radius: 0 !important; }
       th, td {
-        padding: 3px 5px;
-        border: 1px solid #bbb;
+        display: table-cell !important;
+        padding: 3pt 5pt;
+        border: 1px solid #999;
         text-align: left;
         word-wrap: break-word;
         white-space: normal;
         color: #000;
+        vertical-align: top;
+        background: transparent !important;
+        font-size: 8.5pt;
+        line-height: 1.35;
+        grid-template-columns: none !important;
       }
       th {
-        background: #f0f0f0 !important;
+        background: #ececec !important;
+        font-family: 'Helvetica', sans-serif;
         font-weight: 700;
-        font-size: 8px;
+        font-size: 7.5pt;
         text-transform: uppercase;
-        letter-spacing: 0.04em;
+        letter-spacing: 0.06em;
         position: static;
-        print-color-adjust: exact; -webkit-print-color-adjust: exact;
+        print-color-adjust: exact;
+        -webkit-print-color-adjust: exact;
       }
-      td { vertical-align: top; background: transparent !important; }
-      tbody tr { border-bottom: 2px solid #999; }
+      td::before { display: none !important; }
+      tbody tr { page-break-inside: avoid; }
       tr:hover td { background: transparent !important; }
-      .mono { font-family: monospace; font-size: 9px; }
-      .desc-cell { max-width: 140px; }
+      .mono { font-family: 'Courier New', monospace; font-size: 8pt; }
     }
 
   </style>
 </head>
 <body>
   <main class="shell">
+    <!-- Print-only header (hidden on screen) -->
+    <header class="print-only-header" aria-hidden="true">
+      <div class="print-brand">CMON — Complaint Monitor</div>
+      <div class="print-sub">DGVCL Pending Complaints Report</div>
+      <div class="print-meta">
+        <span><span class="print-meta-label">Printed</span><strong id="printDate">—</strong></span>
+        <span><span class="print-meta-label">Pending</span><strong id="printTotal">—</strong></span>
+        <span><span class="print-meta-label">Belts</span><strong id="printGroups">—</strong></span>
+      </div>
+    </header>
+
     <!-- Top bar -->
     <header class="topbar">
       <div class="topbar-left">
@@ -1146,6 +1317,19 @@ var complaintsPageTemplate = template.Must(template.New("complaints-page").Parse
             '<svg class="group-chevron" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="6 9 12 15 18 9"/></svg>' +
           '</div>' +
           '<div class="group-body"><div class="tbl-wrap"><table>' +
+            '<colgroup>' +
+              '<col class="complaint-col" style="width:9%">' +
+              '<col style="width:12%">' +
+              '<col style="width:9%">' +
+              '<col style="width:9%">' +
+              '<col style="width:16%">' +
+              '<col style="width:9%">' +
+              '<col style="width:22%">' +
+              '<col style="width:9%">' +
+              '<col class="debug-col" style="width:8%">' +
+              '<col class="debug-col" style="width:8%">' +
+              '<col class="action-col" style="width:8%">' +
+            '</colgroup>' +
             '<thead><tr>' +
               '<th class="complaint-col">Complaint</th><th>Name</th><th>Consumer</th><th>Mobile</th>' +
               '<th>Address</th><th>Area</th><th>Description</th><th>Date</th>' +
@@ -1173,6 +1357,10 @@ var complaintsPageTemplate = template.Must(template.New("complaints-page").Parse
         $("totalSub").textContent = q ? "of " + payload.total_count + " total" : "complaints";
         setMetric("groupCount", q ? filtered.length : payload.group_count);
         $("groupSub").textContent = q ? "of " + payload.group_count + " total" : "active belts";
+
+        // Print header sync
+        setMetric("printTotal", payload.total_count);
+        setMetric("printGroups", payload.group_count);
 
         // Search count
         if (q) {
@@ -1376,7 +1564,15 @@ var complaintsPageTemplate = template.Must(template.New("complaints-page").Parse
       });
 
       refreshBtn.addEventListener("click", () => loadData({ scrape: true }));
-      printBtn.addEventListener("click", () => window.print());
+      printBtn.addEventListener("click", () => {
+        const now = new Date();
+        const stamp = now.toLocaleString(undefined, {
+          day: "2-digit", month: "short", year: "numeric",
+          hour: "2-digit", minute: "2-digit"
+        });
+        const pd = $("printDate"); if (pd) pd.textContent = stamp;
+        window.print();
+      });
 
       // Keyboard shortcuts
       document.addEventListener("keydown", (e) => {
