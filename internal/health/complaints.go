@@ -727,59 +727,78 @@ var complaintsPageTemplate = template.Must(template.New("complaints-page").Parse
 
     /* ── Mobile responsive ── */
     @media (max-width: 768px) {
-      .shell { padding: 14px 14px 32px; }
+      html, body { overflow-x: hidden; }
+      body { font-size: 13px; }
+      .shell { padding: 12px 12px 32px; max-width: 100%; }
 
       .topbar {
         flex-wrap: wrap;
-        gap: 10px;
-        padding-bottom: 14px;
-        margin-bottom: 16px;
+        gap: 8px;
+        padding-bottom: 12px;
+        margin-bottom: 14px;
       }
-      .topbar-left { flex: 1 1 auto; }
+      .logo { font-size: 14px; }
+      .status-chip { font-size: 9.5px; padding: 4px 9px; letter-spacing: 0.06em; }
+      .topbar-left { flex: 1 1 auto; min-width: 0; }
       .topbar-right {
         width: 100%;
         justify-content: flex-end;
-        gap: 8px;
+        gap: 6px;
       }
+      .updated-ago, .ws-status { font-size: 10px; padding: 3px 8px; }
 
       .stats-row {
         grid-template-columns: 1fr 1fr;
         gap: 8px;
-        margin-bottom: 14px;
+        margin-bottom: 12px;
       }
-      .stat-card { padding: 12px 14px; }
-      .stat-value { font-size: 24px; }
-      .stat-label { font-size: 9.5px; letter-spacing: 0.08em; }
-      .stat-sub { font-size: 10.5px; margin-top: 4px; }
+      .stat-card { padding: 11px 12px; }
+      .stat-value { font-size: 22px; }
+      .stat-label { font-size: 9px; letter-spacing: 0.06em; margin-bottom: 6px; }
+      .stat-sub { font-size: 10px; margin-top: 4px; }
 
       .toolbar { gap: 8px; }
       .search-box { flex: 1 1 100%; min-width: 0; }
-      .search-count { width: 100%; order: 5; }
+      .search-box input {
+        font-size: 16px;       /* prevents iOS auto-zoom on focus */
+        padding: 9px 12px 9px 36px;
+      }
+      .search-count { width: 100%; order: 5; font-size: 11px; }
       .tool-btn, .refresh-btn {
         flex: 1 1 0;
         justify-content: center;
         margin-left: 0;
-        padding: 9px 12px;
+        padding: 9px 10px;
+        font-size: 12.5px;
       }
 
-      .dist-bar-wrap { padding: 12px 14px; }
-      .dist-legend { gap: 8px 14px; font-size: 12px; }
+      .banner { font-size: 12.5px; padding: 10px 12px; }
+      .dist-bar-wrap { padding: 11px 12px; }
+      .dist-bar-title { font-size: 10px; letter-spacing: 0.08em; }
+      .dist-legend { gap: 6px 12px; font-size: 11.5px; }
 
-      .group-header { padding: 12px 14px; }
-      .group-name { font-size: 13.5px; }
-      .group-badge { font-size: 11.5px; padding: 2px 8px; }
+      .group-header { padding: 11px 12px; }
+      .group-name { font-size: 13px; }
+      .group-badge { font-size: 11px; padding: 2px 8px; }
 
-      /* Card-based table layout */
-      .tbl-wrap { overflow: visible; padding: 6px 10px 10px; }
-      table, thead, tbody, th, td, tr { display: block; }
+      /* Card-based table layout — break out of fixed table layout */
+      .tbl-wrap { overflow: visible; padding: 4px 8px 8px; }
+      table {
+        display: block;
+        min-width: 0 !important;
+        width: 100% !important;
+        table-layout: auto !important;
+      }
+      thead, tbody, tr, th, td { display: block; }
       thead { display: none; }
+      colgroup { display: none; }
 
       tbody tr {
         background: var(--surface);
         border: 1px solid var(--border);
         border-radius: var(--r-sm);
         margin: 8px 0;
-        padding: 10px 12px 12px;
+        padding: 8px 10px 10px;
         box-shadow: var(--shadow-sm);
       }
       tbody tr:last-child td { border-bottom: 1px solid var(--border); }
@@ -787,37 +806,36 @@ var complaintsPageTemplate = template.Must(template.New("complaints-page").Parse
 
       td {
         display: grid;
-        grid-template-columns: 80px 1fr;
-        column-gap: 12px;
+        grid-template-columns: 76px minmax(0, 1fr);
+        column-gap: 10px;
         align-items: baseline;
-        padding: 6px 0;
+        padding: 5px 0;
         border-bottom: 1px solid var(--border);
         text-align: left;
-        font-size: 13px;
+        font-size: 12.5px;
         line-height: 1.45;
+        min-width: 0;
+        word-break: break-word;
+        overflow-wrap: anywhere;
       }
       td:last-child { border-bottom: none; }
       td::before {
         content: attr(data-label);
         font-weight: 600;
-        font-size: 10px;
+        font-size: 9.5px;
         text-transform: uppercase;
-        letter-spacing: 0.08em;
+        letter-spacing: 0.06em;
         color: var(--text-dim);
         line-height: 1.6;
       }
-      .desc-cell {
-        max-width: none;
-        grid-template-columns: 1fr;
-        row-gap: 3px;
-      }
-      td[data-label="Address"] {
-        grid-template-columns: 1fr;
-        row-gap: 3px;
+      .mono { font-size: 11.5px; }
+      .desc-cell, td[data-label="Address"] {
+        grid-template-columns: minmax(0, 1fr);
+        row-gap: 2px;
       }
       .action-col {
-        margin-top: 6px;
-        padding-top: 10px !important;
+        margin-top: 4px;
+        padding-top: 9px !important;
         border-top: 1px dashed var(--border);
         border-bottom: none !important;
         display: block !important;
@@ -830,13 +848,15 @@ var complaintsPageTemplate = template.Must(template.New("complaints-page").Parse
         font-size: 13px;
       }
       .modal { padding: 20px; border-radius: var(--r-md); }
+      .modal-title { font-size: 16px; }
     }
 
     @media (max-width: 420px) {
+      .shell { padding: 10px 10px 28px; }
       .stats-row { grid-template-columns: 1fr; }
       .tool-btn, .refresh-btn { flex: 1 1 100%; }
-      .logo { font-size: 15px; }
-      .stat-value { font-size: 22px; }
+      .stat-value { font-size: 20px; }
+      td { grid-template-columns: 70px minmax(0, 1fr); column-gap: 8px; }
     }
 
     /* ── Print styles ── */
