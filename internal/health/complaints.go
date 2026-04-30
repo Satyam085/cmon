@@ -1338,14 +1338,14 @@ var complaintsPageTemplate = template.Must(template.New("complaints-page").Parse
           '</div>' +
           '<div class="group-body"><div class="tbl-wrap"><table>' +
             '<colgroup>' +
-              '<col class="complaint-col" style="width:9%">' +
+              '<col class="complaint-col" style="width:11%">' +
               '<col style="width:12%">' +
               '<col style="width:9%">' +
               '<col style="width:9%">' +
               '<col style="width:16%">' +
-              '<col style="width:9%">' +
-              '<col style="width:22%">' +
-              '<col style="width:9%">' +
+              '<col style="width:7%">' +
+              '<col style="width:21%">' +
+              '<col style="width:10%">' +
               '<col class="debug-col" style="width:8%">' +
               '<col class="debug-col" style="width:8%">' +
               '<col class="action-col" style="width:8%">' +
