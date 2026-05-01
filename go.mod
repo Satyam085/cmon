@@ -5,6 +5,7 @@ go 1.25.3
 require (
 	github.com/PuerkitoBio/goquery v1.11.0
 	github.com/fogleman/gg v1.3.0
+	github.com/gorilla/websocket v1.5.3
 	github.com/joho/godotenv v1.5.1
 	go.mau.fi/whatsmeow v0.0.0-20260227112304-c9652e4448a2
 	golang.org/x/net v0.50.0
@@ -21,7 +22,6 @@ require (
 	github.com/elliotchance/orderedmap/v3 v3.1.0 // indirect
 	github.com/golang/freetype v0.0.0-20170609003504-e2365dfdc4a0 // indirect
 	github.com/google/uuid v1.6.0 // indirect
-	github.com/gorilla/websocket v1.5.3 // indirect
 	github.com/mattn/go-colorable v0.1.14 // indirect
 	github.com/mattn/go-isatty v0.0.20 // indirect
 	github.com/ncruces/go-strftime v1.0.0 // indirect
