@@ -94,7 +94,7 @@ func main() {
 	healthMonitor := health.NewMonitor()
 
 	// Step 5: Create authenticated session client (replaces browser context)
-	sc, err := session.New()
+	sc, err := session.New(cfg.APIRateLimitRPS, cfg.APIRateLimitBurst, cfg.APIMaxRetries429)
 	if err != nil {
 		log.Fatal("❌ Failed to create session client:", err)
 	}

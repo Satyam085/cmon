@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"log"
 	"sync"
-	"time"
 
 	"cmon/internal/session"
 )
@@ -160,9 +159,6 @@ func (w *Worker) processComplaint(complaint Link) ProcessResult {
 	if details.ComplainantName != nil {
 		consumerName = fmt.Sprintf("%v", details.ComplainantName)
 	}
-
-	// Small delay to avoid overwhelming the server
-	time.Sleep(100 * time.Millisecond)
 
 	return ProcessResult{
 		ComplaintID:  complaint.ComplaintNumber,

@@ -83,6 +83,11 @@ type Config struct {
 	WorkerPoolSize int           // Number of concurrent workers for complaint processing
 	HTTPMaxConns   int           // Maximum HTTP connections in pool
 	HTTPTimeout    time.Duration // HTTP client timeout
+
+	// API rate limiting (DGVCL upstream returns 429 if we burst too fast)
+	APIRateLimitRPS   float64 // Sustained req/s ceiling for the DGVCL API
+	APIRateLimitBurst int     // Token-bucket burst size
+	APIMaxRetries429  int     // Max 429 retry attempts per request
 }
 
 // LoadConfig loads configuration from environment variables with defaults.
@@ -165,6 +170,11 @@ func LoadConfig() (*Config, error) {
 		WorkerPoolSize: getEnvInt("WORKER_POOL_SIZE", 10),      // 10 concurrent workers
 		HTTPMaxConns:   getEnvInt("HTTP_MAX_CONNS", 100),       // 100 connection pool size
 		HTTPTimeout:    getEnvDuration("HTTP_TIMEOUT", 30*time.Second), // 30s HTTP timeout
+
+		// API rate limiting - keeps us under the DGVCL portal's 429 threshold
+		APIRateLimitRPS:   getEnvFloat("API_RATE_LIMIT_RPS", 3.0),
+		APIRateLimitBurst: getEnvInt("API_RATE_LIMIT_BURST", 5),
+		APIMaxRetries429:  getEnvInt("API_MAX_RETRIES_429", 5),
 	}
 
 	// Step 4: Validate required fields
@@ -227,6 +237,16 @@ func getEnvInt(key string, defaultValue int) int {
 	if value := os.Getenv(key); value != "" {
 		if intVal, err := strconv.Atoi(value); err == nil {
 			return intVal
+		}
+	}
+	return defaultValue
+}
+
+// getEnvFloat returns the environment variable as a float64 or a default if not set/invalid
+func getEnvFloat(key string, defaultValue float64) float64 {
+	if value := os.Getenv(key); value != "" {
+		if f, err := strconv.ParseFloat(value, 64); err == nil {
+			return f
 		}
 	}
 	return defaultValue

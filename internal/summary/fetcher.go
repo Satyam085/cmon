@@ -11,100 +11,133 @@ import (
 	"cmon/internal/storage"
 )
 
-// complaintRequest holds the mapping between a complaint number and its API ID.
-type complaintRequest struct {
-	complaintNo string
+// pendingComplaint pairs a stored complaint ID with its API ID so the
+// backfill path can fetch and persist details in one go.
+type pendingComplaint struct {
+	complaintID string
 	apiID       string
 }
 
-// FetchAllPendingDetails fetches complaint details for all pending complaints.
+// FetchAllPendingDetails returns one Complaint per active complaint in storage.
 //
-// Uses goroutines for concurrent fetching (replaces the browser's Promise.allSettled).
-// Each fetch is an authenticated HTTP GET via the session client.
+// Storage is the source of truth: scrape cycles populate every detail field
+// when a complaint is first seen, so the dashboard does not need to call the
+// DGVCL detail API on every refresh. Only rows that pre-date this caching
+// behaviour (or whose details were missed) trigger a one-shot API backfill
+// here, after which they too become storage-resident.
 //
 // Parameters:
-//   - sc: Authenticated session client
-//   - stor: Storage containing pending complaint IDs and API IDs
+//   - sc: Authenticated session client (used only for the rare backfill path)
+//   - stor: Storage containing every pending complaint and its cached details
 //
 // Returns:
-//   - []Complaint: Complaint details for all pending complaints
-//   - error: If no complaints found or all fetches fail
+//   - []Complaint: One entry per complaint in storage that has an API ID
+//   - error: Only when storage has no pending complaints
 func FetchAllPendingDetails(sc *session.Client, stor *storage.Storage) ([]Complaint, error) {
 	complaintIDs := stor.GetAllSeenComplaints()
 	if len(complaintIDs) == 0 {
 		return nil, fmt.Errorf("no pending complaints found")
 	}
 
-	log.Printf("📊 Fetching details for %d pending complaints...", len(complaintIDs))
+	complaints := make([]Complaint, 0, len(complaintIDs))
+	var needsBackfill []pendingComplaint
 
-	// Build list of valid complaint requests (those with API IDs)
-	var requests []complaintRequest
 	for _, id := range complaintIDs {
 		apiID := stor.GetAPIID(id)
 		if apiID == "" {
 			log.Printf("  ⚠️  No API ID for complaint %s, skipping", id)
 			continue
 		}
-		requests = append(requests, complaintRequest{complaintNo: id, apiID: apiID})
+
+		c := buildFromStorage(stor, id, apiID)
+		if needsRefetch(c) {
+			needsBackfill = append(needsBackfill, pendingComplaint{id, apiID})
+			continue
+		}
+		complaints = append(complaints, c)
 	}
 
-	if len(requests) == 0 {
+	if len(needsBackfill) > 0 {
+		log.Printf("📊 Backfilling details for %d legacy complaints (one-time per complaint)", len(needsBackfill))
+		filled := backfillDetails(sc, stor, needsBackfill)
+		complaints = append(complaints, filled...)
+	}
+
+	if len(complaints) == 0 {
 		return nil, fmt.Errorf("no complaints with valid API IDs")
 	}
 
-	// Fetch all concurrently using goroutines
-	complaints := fetchAllConcurrent(sc, stor, requests)
-
-	if len(complaints) == 0 {
-		return nil, fmt.Errorf("failed to fetch any complaint details")
-	}
-
-	log.Printf("📊 Successfully fetched %d/%d complaint details", len(complaints), len(requests))
+	log.Printf("📊 Returning %d complaint records (storage-backed)", len(complaints))
 	return complaints, nil
 }
 
-// fetchAllConcurrent fetches all complaints concurrently using goroutines.
-// A semaphore limits concurrency to 10 to avoid overwhelming the server.
-func fetchAllConcurrent(sc *session.Client, stor *storage.Storage, requests []complaintRequest) []Complaint {
-	type result struct {
-		complaint *Complaint
-		err       error
+// buildFromStorage assembles a Complaint entirely from cached storage values.
+func buildFromStorage(stor *storage.Storage, complaintID, apiID string) Complaint {
+	return Complaint{
+		ComplainNo:        complaintID,
+		Name:              stor.GetConsumerName(complaintID),
+		MobileNo:          stor.GetMobileNo(complaintID),
+		Address:           stor.GetAddress(complaintID),
+		Area:              stor.GetArea(complaintID),
+		Village:           stor.GetVillage(complaintID),
+		Belt:              stor.GetBelt(complaintID),
+		Description:       stor.GetDescription(complaintID),
+		ComplainDate:      stor.GetComplainDate(complaintID),
+		TelegramMessageID: stor.GetMessageID(complaintID),
+		WhatsAppMessageID: stor.GetWAMessageID(complaintID),
+		APIID:             apiID,
 	}
-
-	const maxConcurrent = 10
-	sem := make(chan struct{}, maxConcurrent)
-
-	results := make([]result, len(requests))
-	var wg sync.WaitGroup
-
-	for i, r := range requests {
-		wg.Add(1)
-		go func(idx int, req complaintRequest) {
-			defer wg.Done()
-			sem <- struct{}{}        // acquire slot
-			defer func() { <-sem }() // release slot
-			c, err := fetchComplaintDetail(sc, stor, req.apiID, req.complaintNo)
-			results[idx] = result{complaint: c, err: err}
-		}(i, r)
-	}
-
-	wg.Wait()
-
-	var complaints []Complaint
-	for _, r := range results {
-		if r.err != nil {
-			log.Printf("  ⚠️  Failed to fetch complaint detail: %v", r.err)
-			continue
-		}
-		if r.complaint != nil {
-			complaints = append(complaints, *r.complaint)
-		}
-	}
-	return complaints
 }
 
-// fetchComplaintDetail fetches a single complaint's details from the API.
-func fetchComplaintDetail(sc *session.Client, stor *storage.Storage, apiID, complaintNumber string) (*Complaint, error) {
+// needsRefetch returns true when a Complaint built from storage is missing the
+// detail fields that scrape would normally cache. Used to decide which rows to
+// backfill from the API. ConsumerName alone is not enough — it has been stored
+// since before this change — so we key off ComplainDate, the cheapest field
+// to detect as "never cached".
+func needsRefetch(c Complaint) bool {
+	return c.ComplainDate == "" && c.Description == "" && c.MobileNo == ""
+}
+
+// backfillDetails fetches missing detail fields for legacy complaints and
+// persists them so that subsequent dashboard loads stay storage-resident.
+//
+// The session.Client global rate limiter paces these calls so a one-time
+// backfill of N legacy rows behaves like any other paced burst.
+func backfillDetails(sc *session.Client, stor *storage.Storage, pending []pendingComplaint) []Complaint {
+	type result struct {
+		c  *Complaint
+		ok bool
+	}
+	results := make([]result, len(pending))
+
+	var wg sync.WaitGroup
+	for i, p := range pending {
+		wg.Add(1)
+		go func(idx int, complaintID, apiID string) {
+			defer wg.Done()
+			c, err := fetchAndPersistDetail(sc, stor, complaintID, apiID)
+			if err != nil {
+				log.Printf("  ⚠️  Backfill failed for %s: %v", complaintID, err)
+				return
+			}
+			results[idx] = result{c: c, ok: true}
+		}(i, p.complaintID, p.apiID)
+	}
+	wg.Wait()
+
+	out := make([]Complaint, 0, len(results))
+	for _, r := range results {
+		if r.ok && r.c != nil {
+			out = append(out, *r.c)
+		}
+	}
+	return out
+}
+
+// fetchAndPersistDetail hits the DGVCL detail API for a single complaint,
+// writes the result into storage so future reads bypass the API, and returns
+// the populated Complaint for immediate dashboard rendering.
+func fetchAndPersistDetail(sc *session.Client, stor *storage.Storage, complaintID, apiID string) (*Complaint, error) {
 	apiURL := fmt.Sprintf("https://complaint.dgvcl.com/api/complaint-record/%s", apiID)
 
 	body, err := sc.GetJSON(apiURL)
@@ -122,19 +155,31 @@ func fetchComplaintDetail(sc *session.Client, stor *storage.Storage, apiID, comp
 		return nil, fmt.Errorf("complaintdetail missing in response")
 	}
 
+	mobile := safeStr(detail["mobile_no"])
+	address := safeStr(detail["exact_location"])
+	area := safeStr(detail["area"])
+	desc := safeStr(detail["description"])
+	date := safeStr(detail["complain_date"])
+
+	if err := stor.SetDetails(complaintID, mobile, address, area, desc, date); err != nil {
+		// Persistence failure shouldn't fail the dashboard render — log and
+		// continue with the in-memory Complaint we just built.
+		log.Printf("  ⚠️  Failed to persist backfilled details for %s: %v", complaintID, err)
+	}
+
 	return &Complaint{
 		ComplainNo:        safeStr(detail["complain_no"]),
 		Name:              safeStr(detail["complainant_name"]),
 		ConsumerNo:        safeStr(detail["consumer_no"]),
-		MobileNo:          safeStr(detail["mobile_no"]),
-		Address:           safeStr(detail["exact_location"]),
-		Area:              safeStr(detail["area"]),
-		Village:           stor.GetVillage(complaintNumber),
-		Belt:              stor.GetBelt(complaintNumber),
-		Description:       safeStr(detail["description"]),
-		ComplainDate:      safeStr(detail["complain_date"]),
-		TelegramMessageID: stor.GetMessageID(complaintNumber),
-		WhatsAppMessageID: stor.GetWAMessageID(complaintNumber),
+		MobileNo:          mobile,
+		Address:           address,
+		Area:              area,
+		Village:           stor.GetVillage(complaintID),
+		Belt:              stor.GetBelt(complaintID),
+		Description:       desc,
+		ComplainDate:      date,
+		TelegramMessageID: stor.GetMessageID(complaintID),
+		WhatsAppMessageID: stor.GetWAMessageID(complaintID),
 		APIID:             apiID,
 	}, nil
 }

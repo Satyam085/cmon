@@ -40,6 +40,14 @@ type Record struct {
 	ConsumerName string
 	Village      string
 	Belt         string
+
+	// Cached complaint detail fields (sourced from the DGVCL detail API
+	// during scrape, used to render the dashboard without re-fetching).
+	MobileNo     string
+	Address      string // exact_location
+	Area         string
+	Description  string
+	ComplainDate string
 }
 
 // Storage provides thread-safe storage for complaint data.
@@ -54,6 +62,11 @@ type Storage struct {
 	consumerNames        map[string]string // complaintID → Consumer name
 	villages             map[string]string // complaintID → village
 	belts                map[string]string // complaintID → belt
+	mobileNos            map[string]string // complaintID → mobile number
+	addresses            map[string]string // complaintID → exact location
+	areas                map[string]string // complaintID → area
+	descriptions         map[string]string // complaintID → description
+	complainDates        map[string]string // complaintID → complain_date
 }
 
 // PendingResolution stores info about a complaint awaiting resolution note
@@ -76,6 +89,11 @@ func New() *Storage {
 		consumerNames:        make(map[string]string),
 		villages:             make(map[string]string),
 		belts:                make(map[string]string),
+		mobileNos:            make(map[string]string),
+		addresses:            make(map[string]string),
+		areas:                make(map[string]string),
+		descriptions:         make(map[string]string),
+		complainDates:        make(map[string]string),
 	}
 
 	// Connect to SQLite
@@ -129,6 +147,11 @@ func New() *Storage {
 
 	s.ensureComplaintColumn("village", "TEXT")
 	s.ensureComplaintColumn("belt", "TEXT")
+	s.ensureComplaintColumn("mobile_no", "TEXT")
+	s.ensureComplaintColumn("address", "TEXT")
+	s.ensureComplaintColumn("area", "TEXT")
+	s.ensureComplaintColumn("description", "TEXT")
+	s.ensureComplaintColumn("complain_date", "TEXT")
 
 	// Run migration from old complaints.csv if needed
 	s.migrateFromCSV()
@@ -231,7 +254,7 @@ func (s *Storage) migrateFromCSV() {
 
 // loadFromDB loads all complaint data from SQLite into the in-memory maps.
 func (s *Storage) loadFromDB() {
-	rows, err := s.db.Query(`SELECT complaint_id, tg_message_id, wa_message_id, api_id, consumer_name, village, belt FROM complaints`)
+	rows, err := s.db.Query(`SELECT complaint_id, tg_message_id, wa_message_id, api_id, consumer_name, village, belt, mobile_no, address, area, description, complain_date FROM complaints`)
 	if err != nil {
 		log.Fatalf("❌ Failed to query database on load: %v", err)
 	}
@@ -240,7 +263,8 @@ func (s *Storage) loadFromDB() {
 	count := 0
 	for rows.Next() {
 		var complaintID, tgMessageID, waMessageID, apiID, consumerName, village, belt sql.NullString
-		if err := rows.Scan(&complaintID, &tgMessageID, &waMessageID, &apiID, &consumerName, &village, &belt); err != nil {
+		var mobileNo, address, area, description, complainDate sql.NullString
+		if err := rows.Scan(&complaintID, &tgMessageID, &waMessageID, &apiID, &consumerName, &village, &belt, &mobileNo, &address, &area, &description, &complainDate); err != nil {
 			log.Printf("⚠️  Failed to scan row on load: %v", err)
 			continue
 		}
@@ -265,6 +289,21 @@ func (s *Storage) loadFromDB() {
 			}
 			if belt.Valid {
 				s.belts[complaintID.String] = belt.String
+			}
+			if mobileNo.Valid {
+				s.mobileNos[complaintID.String] = mobileNo.String
+			}
+			if address.Valid {
+				s.addresses[complaintID.String] = address.String
+			}
+			if area.Valid {
+				s.areas[complaintID.String] = area.String
+			}
+			if description.Valid {
+				s.descriptions[complaintID.String] = description.String
+			}
+			if complainDate.Valid {
+				s.complainDates[complaintID.String] = complainDate.String
 			}
 			count++
 		}
@@ -405,6 +444,71 @@ func (s *Storage) GetBelt(complaintID string) string {
 	return s.belts[complaintID]
 }
 
+// GetMobileNo retrieves the cached mobile number for a complaint.
+func (s *Storage) GetMobileNo(complaintID string) string {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.mobileNos[complaintID]
+}
+
+// GetAddress retrieves the cached exact-location address for a complaint.
+func (s *Storage) GetAddress(complaintID string) string {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.addresses[complaintID]
+}
+
+// GetArea retrieves the cached area for a complaint.
+func (s *Storage) GetArea(complaintID string) string {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.areas[complaintID]
+}
+
+// GetDescription retrieves the cached description for a complaint.
+func (s *Storage) GetDescription(complaintID string) string {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.descriptions[complaintID]
+}
+
+// GetComplainDate retrieves the cached complain date for a complaint.
+func (s *Storage) GetComplainDate(complaintID string) string {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.complainDates[complaintID]
+}
+
+// SetDetails persists the cached complaint detail fields for a known complaint.
+//
+// Used by the dashboard layer to lazy-backfill rows that pre-date the schema
+// change (or whose details were not captured during their original scrape).
+// All fields are written atomically; the in-memory cache is only updated
+// after the DB write succeeds so memory never gets ahead of disk.
+func (s *Storage) SetDetails(complaintID, mobileNo, address, area, description, complainDate string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	if !s.seen[complaintID] {
+		return fmt.Errorf("complaint %s not found in storage", complaintID)
+	}
+
+	if _, err := s.db.Exec(`
+		UPDATE complaints
+		SET mobile_no = ?, address = ?, area = ?, description = ?, complain_date = ?
+		WHERE complaint_id = ?
+	`, mobileNo, address, area, description, complainDate, complaintID); err != nil {
+		return err
+	}
+
+	s.mobileNos[complaintID] = mobileNo
+	s.addresses[complaintID] = address
+	s.areas[complaintID] = area
+	s.descriptions[complaintID] = description
+	s.complainDates[complaintID] = complainDate
+	return nil
+}
+
 // UpdateBelt persists a belt reassignment for an existing complaint.
 func (s *Storage) UpdateBelt(complaintID, belt string) error {
 	s.mu.Lock()
@@ -486,8 +590,8 @@ func (s *Storage) SaveMultiple(records []Record) error {
 	}
 
 	stmt, err := tx.Prepare(`
-		INSERT INTO complaints (complaint_id, tg_message_id, wa_message_id, api_id, consumer_name, village, belt)
-		VALUES (?, ?, ?, ?, ?, ?, ?)
+		INSERT INTO complaints (complaint_id, tg_message_id, wa_message_id, api_id, consumer_name, village, belt, mobile_no, address, area, description, complain_date)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 		ON CONFLICT(complaint_id) DO UPDATE SET
 			tg_message_id = CASE
 				WHEN excluded.tg_message_id != '' THEN excluded.tg_message_id
@@ -512,6 +616,26 @@ func (s *Storage) SaveMultiple(records []Record) error {
 			belt = CASE
 				WHEN excluded.belt != '' THEN excluded.belt
 				ELSE complaints.belt
+			END,
+			mobile_no = CASE
+				WHEN excluded.mobile_no != '' THEN excluded.mobile_no
+				ELSE complaints.mobile_no
+			END,
+			address = CASE
+				WHEN excluded.address != '' THEN excluded.address
+				ELSE complaints.address
+			END,
+			area = CASE
+				WHEN excluded.area != '' THEN excluded.area
+				ELSE complaints.area
+			END,
+			description = CASE
+				WHEN excluded.description != '' THEN excluded.description
+				ELSE complaints.description
+			END,
+			complain_date = CASE
+				WHEN excluded.complain_date != '' THEN excluded.complain_date
+				ELSE complaints.complain_date
 			END
 	`)
 	if err != nil {
@@ -521,7 +645,7 @@ func (s *Storage) SaveMultiple(records []Record) error {
 	defer stmt.Close()
 
 	for _, r := range records {
-		if _, err := stmt.Exec(r.ComplaintID, r.MessageID, r.WAMessageID, r.APIID, r.ConsumerName, r.Village, r.Belt); err != nil {
+		if _, err := stmt.Exec(r.ComplaintID, r.MessageID, r.WAMessageID, r.APIID, r.ConsumerName, r.Village, r.Belt, r.MobileNo, r.Address, r.Area, r.Description, r.ComplainDate); err != nil {
 			tx.Rollback()
 			return err
 		}
@@ -557,6 +681,21 @@ func (s *Storage) SaveMultiple(records []Record) error {
 		}
 		if r.Belt != "" {
 			s.belts[r.ComplaintID] = r.Belt
+		}
+		if r.MobileNo != "" {
+			s.mobileNos[r.ComplaintID] = r.MobileNo
+		}
+		if r.Address != "" {
+			s.addresses[r.ComplaintID] = r.Address
+		}
+		if r.Area != "" {
+			s.areas[r.ComplaintID] = r.Area
+		}
+		if r.Description != "" {
+			s.descriptions[r.ComplaintID] = r.Description
+		}
+		if r.ComplainDate != "" {
+			s.complainDates[r.ComplaintID] = r.ComplainDate
 		}
 	}
 
@@ -599,6 +738,11 @@ func (s *Storage) Remove(complaintID string) error {
 	delete(s.consumerNames, complaintID)
 	delete(s.villages, complaintID)
 	delete(s.belts, complaintID)
+	delete(s.mobileNos, complaintID)
+	delete(s.addresses, complaintID)
+	delete(s.areas, complaintID)
+	delete(s.descriptions, complaintID)
+	delete(s.complainDates, complaintID)
 
 	return nil
 }
@@ -644,6 +788,11 @@ func (s *Storage) RemoveIfExists(complaintID string) (bool, error) {
 	delete(s.consumerNames, complaintID)
 	delete(s.villages, complaintID)
 	delete(s.belts, complaintID)
+	delete(s.mobileNos, complaintID)
+	delete(s.addresses, complaintID)
+	delete(s.areas, complaintID)
+	delete(s.descriptions, complaintID)
+	delete(s.complainDates, complaintID)
 
 	return true, nil
 }

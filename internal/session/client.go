@@ -14,11 +14,13 @@ package session
 
 import (
 	"bytes"
+	"context"
 	"crypto/tls"
 	"encoding/json"
 	"fmt"
 	"io"
 	"log"
+	"math/rand"
 	"net/http"
 	"net/http/cookiejar"
 	"net/url"
@@ -32,6 +34,7 @@ import (
 
 	"github.com/PuerkitoBio/goquery"
 	"golang.org/x/net/publicsuffix"
+	"golang.org/x/time/rate"
 )
 
 // Client is a thread-safe HTTP client that maintains an authenticated session
@@ -44,6 +47,11 @@ type Client struct {
 	mu          sync.RWMutex // protects bearerToken and baseURL
 	baseURL     string       // root host, used for session expiry checks
 	bearerToken string       // Sanctum Bearer token set after successful login
+
+	// limiter throttles outbound requests to stay under the DGVCL portal's
+	// rate limit. Shared across all goroutines using this client.
+	limiter       *rate.Limiter
+	maxRetries429 int
 }
 
 // New creates a new session client with a fresh, empty cookie jar.
@@ -51,7 +59,12 @@ type Client struct {
 // The underlying http.Client shares connection pools across all callers
 // through the transport. The cookie jar is per-Client and is the key
 // mechanism that stores the authenticated session.
-func New() (*Client, error) {
+//
+// Parameters:
+//   - rps: Sustained requests-per-second ceiling for the DGVCL API
+//   - burst: Token-bucket burst size (≥1)
+//   - maxRetries429: How many times to retry a request that returns HTTP 429
+func New(rps float64, burst, maxRetries429 int) (*Client, error) {
 	jar, err := cookiejar.New(&cookiejar.Options{
 		PublicSuffixList: publicsuffix.List,
 	})
@@ -74,12 +87,24 @@ func New() (*Client, error) {
 		ForceAttemptHTTP2:   true,
 	}
 
+	if rps <= 0 {
+		rps = 3.0
+	}
+	if burst < 1 {
+		burst = 1
+	}
+	if maxRetries429 < 0 {
+		maxRetries429 = 0
+	}
+
 	return &Client{
 		http: &http.Client{
 			Timeout:   30 * time.Second,
 			Jar:       jar,
 			Transport: transport,
 		},
+		limiter:       rate.NewLimiter(rate.Limit(rps), burst),
+		maxRetries429: maxRetries429,
 	}, nil
 }
 
@@ -240,7 +265,7 @@ func (c *Client) GetJSON(rawURL string) ([]byte, error) {
 		req.Header.Set("Authorization", "Bearer "+token)
 	}
 
-	resp, err := c.http.Do(req)
+	resp, err := c.do(req)
 	if err != nil {
 		return nil, fmt.Errorf("GET %s failed: %w", rawURL, err)
 	}
@@ -272,7 +297,7 @@ func (c *Client) PostForm(rawURL string, data url.Values) ([]byte, error) {
 		req.Header.Set("Authorization", "Bearer "+token)
 	}
 
-	resp, err := c.http.Do(req)
+	resp, err := c.do(req)
 	if err != nil {
 		return nil, fmt.Errorf("POST %s failed: %w", rawURL, err)
 	}
@@ -304,7 +329,7 @@ func (c *Client) get(rawURL string) (*http.Response, error) {
 		req.Header.Set("Authorization", "Bearer "+token)
 	}
 
-	resp, err := c.http.Do(req)
+	resp, err := c.do(req)
 	if err != nil {
 		return nil, fmt.Errorf("GET %s failed: %w", rawURL, err)
 	}
@@ -313,6 +338,108 @@ func (c *Client) get(rawURL string) (*http.Response, error) {
 		return nil, fmt.Errorf("GET %s returned HTTP %d", rawURL, resp.StatusCode)
 	}
 	return resp, nil
+}
+
+// do is the central HTTP entry point: it waits on the rate limiter, sends
+// the request, and transparently retries on HTTP 429. On retry it honors a
+// Retry-After header (delta-seconds or HTTP-date) and otherwise falls back
+// to capped exponential backoff with jitter.
+//
+// Requests with bodies must populate req.GetBody so the body can be rewound
+// on each retry. http.NewRequest sets GetBody automatically for the
+// bytes.Buffer / bytes.Reader / strings.Reader bodies used in this package.
+func (c *Client) do(req *http.Request) (*http.Response, error) {
+	ctx := req.Context()
+	if ctx == nil {
+		ctx = context.Background()
+	}
+
+	const (
+		baseBackoff = 500 * time.Millisecond
+		maxBackoff  = 30 * time.Second
+	)
+
+	var lastResp *http.Response
+	for attempt := 0; ; attempt++ {
+		if c.limiter != nil {
+			if err := c.limiter.Wait(ctx); err != nil {
+				return nil, fmt.Errorf("rate limiter wait: %w", err)
+			}
+		}
+
+		// Rewind the body for retries. First attempt uses req.Body as-is.
+		if attempt > 0 && req.GetBody != nil {
+			body, err := req.GetBody()
+			if err != nil {
+				return nil, fmt.Errorf("failed to rewind request body for retry: %w", err)
+			}
+			req.Body = body
+		}
+
+		resp, err := c.http.Do(req)
+		if err != nil {
+			return nil, err
+		}
+
+		if resp.StatusCode != http.StatusTooManyRequests {
+			return resp, nil
+		}
+
+		lastResp = resp
+		if attempt >= c.maxRetries429 {
+			// Out of retries — surface the 429 to the caller so existing
+			// status-code checks can report it.
+			return resp, nil
+		}
+
+		wait := parseRetryAfter(resp.Header.Get("Retry-After"))
+		if wait <= 0 {
+			wait = backoffDelay(attempt, baseBackoff, maxBackoff)
+		}
+		// Drain + close so the connection can be reused.
+		io.Copy(io.Discard, resp.Body)
+		resp.Body.Close()
+
+		log.Printf("  ⏳ HTTP 429 from %s — backing off %s (attempt %d/%d)",
+			req.URL.String(), wait.Round(time.Millisecond), attempt+1, c.maxRetries429)
+
+		timer := time.NewTimer(wait)
+		select {
+		case <-ctx.Done():
+			timer.Stop()
+			return lastResp, ctx.Err()
+		case <-timer.C:
+		}
+	}
+}
+
+// parseRetryAfter parses an HTTP Retry-After header value. Returns 0 if the
+// header is missing or unparseable.
+func parseRetryAfter(h string) time.Duration {
+	h = strings.TrimSpace(h)
+	if h == "" {
+		return 0
+	}
+	if secs, err := strconv.Atoi(h); err == nil && secs >= 0 {
+		return time.Duration(secs) * time.Second
+	}
+	if t, err := http.ParseTime(h); err == nil {
+		if d := time.Until(t); d > 0 {
+			return d
+		}
+	}
+	return 0
+}
+
+// backoffDelay returns an exponential backoff with full jitter, capped at max.
+func backoffDelay(attempt int, base, max time.Duration) time.Duration {
+	d := base << attempt
+	if d <= 0 || d > max {
+		d = max
+	}
+	// full jitter: random in [base, d]
+	jitter := time.Duration(rand.Int63n(int64(d-base+1))) + base
+	return jitter
 }
 
 // solveCaptcha solves the arithmetic captcha used on the DGVCL portal login page.

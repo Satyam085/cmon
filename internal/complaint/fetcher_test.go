@@ -74,7 +74,7 @@ func TestFetchAllFailsOnIncompletePagination(t *testing.T) {
 	}))
 	defer server.Close()
 
-	sc, err := session.New()
+	sc, err := session.New(1000, 1000, 0)
 	if err != nil {
 		t.Fatalf("new session client: %v", err)
 	}

@@ -251,6 +251,11 @@ func (f *Fetcher) processComplaintsConcurrently(complaints []Link) error {
 			ConsumerName: res.ConsumerName,
 			Village:      res.Details.Village,
 			Belt:         res.Details.Belt,
+			MobileNo:     safeStr(res.Details.MobileNo),
+			Address:      safeStr(res.Details.ExactLocation),
+			Area:         safeStr(res.Details.Area),
+			Description:  safeStr(res.Details.Description),
+			ComplainDate: safeStr(res.Details.ComplainDate),
 		}
 		recordsToSave = append(recordsToSave, record)
 		notifications = append(notifications, notification{
