@@ -3,7 +3,8 @@
 // This file exists to avoid circular imports: the whatsapp package imports
 // summary and api here (at the edges of the call graph), while client.go
 // uses function variables (fetchPendingSummary, renderSummaryImage,
-// resolveComplaintAPI) that point to the functions defined here.
+// renderSummaryImages, resolveComplaintAPI) that point to the functions
+// defined here.
 package whatsapp
 
 import (
@@ -17,6 +18,9 @@ import (
 
 // summaryComplaint mirrors summary.Complaint locally so client.go doesn't import summary.
 type summaryComplaint = summary.Complaint
+
+// summaryBeltImage mirrors summary.BeltImage so client.go doesn't import summary.
+type summaryBeltImage = summary.BeltImage
 
 // fetchSummaryComplaints calls summary.FetchAllPendingDetails.
 // storI must be *storage.Storage.
@@ -32,9 +36,14 @@ func fetchSummaryComplaints(sc *session.Client, storI summaryStorage) ([]summary
 	return complaints, nil
 }
 
-// renderTable calls summary.RenderTable.
+// renderTable calls summary.RenderTable (combined image with belt group headers).
 func renderTable(complaints []summaryComplaint) ([]byte, error) {
 	return summary.RenderTable(complaints)
+}
+
+// renderTablesByBelt calls summary.RenderTablesByBelt (one image per belt).
+func renderTablesByBelt(complaints []summaryComplaint) ([]summaryBeltImage, error) {
+	return summary.RenderTablesByBelt(complaints)
 }
 
 // resolveOnWebsite calls api.ResolveComplaint.

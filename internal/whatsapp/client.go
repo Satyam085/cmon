@@ -4,7 +4,7 @@
 //   - Connecting to WhatsApp via the multi-device API (using whatsmeow)
 //   - QR-code pairing on first run (stored session prevents re-pairing)
 //   - Sending plain-text complaint notifications to a configured recipient
-//   - Listening for incoming messages (/summary command and resolve-by-reply)
+//   - Listening for incoming messages (/summary, /summarybelt, resolve-by-reply)
 //
 // Architecture:
 //   - Client: Main struct wrapping whatsmeow.Client + recipient JID + message tracker
@@ -242,7 +242,8 @@ func (c *Client) sendImage(imgBytes []byte, caption string) error {
 // HandleEvents starts the incoming message event loop in a background goroutine.
 //
 // This listens for:
-//   - "/summary" command → fetches pending complaints and sends a summary image
+//   - "/summary" command → sends a single combined summary image
+//   - "/summarybelt" command → sends one summary image per belt
 //   - "resolve <remark>" reply to a tracked complaint message → resolves the complaint
 //     (only active when resolveEnabled is true)
 //
@@ -292,6 +293,13 @@ func (c *Client) HandleEvents(ctx context.Context, sc *session.Client, stor inte
 		}
 
 		lower := strings.ToLower(text)
+
+		// Handle /summarybelt command (per-belt images)
+		if lower == "/summarybelt" {
+			log.Println("📊 WhatsApp /summarybelt command received")
+			go c.handleSummaryBeltCommand(sc, stor)
+			return
+		}
 
 		// Handle /summary command
 		if lower == "/summary" {
@@ -369,7 +377,7 @@ func (c *Client) handleSummaryCommand(sc *session.Client, storI interface{}) {
 		return
 	}
 
-	// Render table as PNG
+	// Render combined table as PNG
 	imgBytes, err := renderSummaryImage(complaints)
 	if err != nil {
 		log.Printf("⚠️  WhatsApp summary render failed: %v", err)
@@ -380,11 +388,49 @@ func (c *Client) handleSummaryCommand(sc *session.Client, storI interface{}) {
 	caption := fmt.Sprintf("📋 %d Pending Complaints", len(complaints))
 	if err := c.sendImage(imgBytes, caption); err != nil {
 		log.Printf("⚠️  WhatsApp summary image send failed: %v", err)
-		// Fallback to text summary
 		c.SendMessage(buildTextSummary(complaints))
 		return
 	}
+}
 
+// handleSummaryBeltCommand fetches all pending complaints and sends one image
+// per belt (via /summarybelt).
+func (c *Client) handleSummaryBeltCommand(sc *session.Client, storI interface{}) {
+	c.SendMessage("📊 Generating belt-wise summary... please wait.")
+
+	stor, ok := storI.(summaryStorage)
+	if !ok {
+		c.SendMessage("❌ Internal error: storage type mismatch.")
+		return
+	}
+
+	complaints, err := fetchPendingSummary(sc, stor)
+	if err != nil {
+		log.Printf("⚠️  WhatsApp belt summary fetch failed: %v", err)
+		c.SendMessage("ℹ️ No pending complaints found.")
+		return
+	}
+
+	beltImages, err := renderSummaryImages(complaints)
+	if err != nil {
+		log.Printf("⚠️  WhatsApp belt summary render failed: %v", err)
+		c.SendMessage(fmt.Sprintf("❌ Failed to render belt summary images: %v", err))
+		return
+	}
+
+	var sendErrs int
+	for _, bi := range beltImages {
+		caption := fmt.Sprintf("📋 %s Belt — %d Pending Complaints", bi.Label, bi.Count)
+		if err := c.sendImage(bi.PNG, caption); err != nil {
+			log.Printf("⚠️  WhatsApp belt summary image send failed for %s: %v", bi.Label, err)
+			sendErrs++
+		}
+	}
+
+	// Fallback to a text summary only if every belt image failed.
+	if sendErrs > 0 && sendErrs == len(beltImages) {
+		c.SendMessage(buildTextSummary(complaints))
+	}
 }
 
 // handleResolve resolves a complaint via the DGVCL API and updates tracking.
@@ -515,6 +561,7 @@ type storageSetter interface {
 var (
 	fetchPendingSummary = defaultFetchPendingSummary
 	renderSummaryImage  = defaultRenderSummaryImage
+	renderSummaryImages = defaultRenderSummaryImages
 	resolveComplaintAPI = defaultResolveComplaintAPI
 )
 
@@ -524,6 +571,10 @@ func defaultFetchPendingSummary(sc *session.Client, stor summaryStorage) ([]summ
 
 func defaultRenderSummaryImage(complaints []summaryComplaint) ([]byte, error) {
 	return renderTable(complaints)
+}
+
+func defaultRenderSummaryImages(complaints []summaryComplaint) ([]summaryBeltImage, error) {
+	return renderTablesByBelt(complaints)
 }
 
 func defaultResolveComplaintAPI(sc *session.Client, apiID, remark string, debugMode bool) error {

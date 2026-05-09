@@ -837,6 +837,12 @@ func (c *Client) handleMessage(ctx context.Context, sc *session.Client, message 
 		return
 	}
 
+	// Handle /summarybelt command (per-belt images)
+	if strings.TrimSpace(message.Text) == "/summarybelt" {
+		c.handleSummaryBeltCommand(ctx, sc, stor)
+		return
+	}
+
 	// Handle /summary command
 	if strings.TrimSpace(message.Text) == "/summary" {
 		c.handleSummaryCommand(ctx, sc, stor)
@@ -1018,7 +1024,7 @@ func (c *Client) handleSummaryCommand(ctx context.Context, sc *session.Client, s
 		return
 	}
 
-	// Render table image
+	// Render combined table image
 	imgBytes, err := summary.RenderTable(complaints)
 	if err != nil {
 		log.Printf("⚠️  Summary render failed: %v\n", err)
@@ -1031,7 +1037,6 @@ func (c *Client) handleSummaryCommand(ctx context.Context, sc *session.Client, s
 		return
 	}
 
-	// Send image
 	caption := fmt.Sprintf("📋 %d Pending Complaints", len(complaints))
 	if err := c.SendPhoto(c.ChatID, imgBytes, caption); err != nil {
 		log.Printf("⚠️  Failed to send summary photo: %v\n", err)
@@ -1045,6 +1050,60 @@ func (c *Client) handleSummaryCommand(ctx context.Context, sc *session.Client, s
 	}
 
 	log.Println("✓ Summary image sent successfully")
+}
+
+// handleSummaryBeltCommand processes the /summarybelt command, sending one
+// image per belt instead of a single combined image.
+func (c *Client) handleSummaryBeltCommand(ctx context.Context, sc *session.Client, stor *storage.Storage) {
+	log.Println("📊 /summarybelt command received")
+
+	processingMsg := Message{
+		ChatID:    c.ChatID,
+		Text:      "📊 <b>Generating belt-wise summary...</b>\nRendering one image per belt.",
+		ParseMode: "HTML",
+	}
+	c.doRequest("sendMessage", processingMsg)
+
+	complaints, err := summary.FetchAllPendingDetails(sc, stor)
+	if err != nil {
+		log.Printf("⚠️  Belt summary fetch failed: %v\n", err)
+		noDataMsg := Message{
+			ChatID:    c.ChatID,
+			Text:      "ℹ️ No pending complaints found.",
+			ParseMode: "HTML",
+		}
+		c.doRequest("sendMessage", noDataMsg)
+		return
+	}
+
+	beltImages, err := summary.RenderTablesByBelt(complaints)
+	if err != nil {
+		log.Printf("⚠️  Belt summary render failed: %v\n", err)
+		errorMsg := Message{
+			ChatID:    c.ChatID,
+			Text:      fmt.Sprintf("❌ Failed to render belt summary images: %v", err),
+			ParseMode: "HTML",
+		}
+		c.doRequest("sendMessage", errorMsg)
+		return
+	}
+
+	for _, bi := range beltImages {
+		caption := fmt.Sprintf("📋 %s Belt — %d Pending Complaints", bi.Label, bi.Count)
+		if err := c.SendPhoto(c.ChatID, bi.PNG, caption); err != nil {
+			log.Printf("⚠️  Failed to send %s belt summary photo: %v\n", bi.Label, err)
+			errorMsg := Message{
+				ChatID:    c.ChatID,
+				Text:      fmt.Sprintf("❌ Failed to send %s belt summary image: %v", bi.Label, err),
+				ParseMode: "HTML",
+			}
+			c.doRequest("sendMessage", errorMsg)
+			continue
+		}
+	}
+
+	log.Printf("✓ Belt summary sent (%d belt images, %d total complaints)\n",
+		len(beltImages), len(complaints))
 }
 
 func (c *Client) handleMoveCommand(message *IncomingMessage, stor *storage.Storage) {
