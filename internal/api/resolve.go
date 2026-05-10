@@ -7,8 +7,28 @@ import (
 	"net/url"
 	"strings"
 
+	"cmon/internal/metrics"
 	"cmon/internal/session"
 )
+
+// DefaultResolveEndpoint is the DGVCL production URL used by ResolveComplaint
+// when no override has been installed. main.go can override this at boot via
+// SetResolveEndpoint so a staging environment can point at its own backend.
+const DefaultResolveEndpoint = "https://complaint.dgvcl.com/api/complaint-assign-process"
+
+// resolveEndpoint is the active endpoint URL. Mutated only from
+// SetResolveEndpoint (boot-time, single-threaded) and from package tests.
+var resolveEndpoint = DefaultResolveEndpoint
+
+// SetResolveEndpoint installs the URL ResolveComplaint posts to. Intended for
+// boot-time initialisation from config; passing an empty string is a no-op
+// so accidental config gaps don't blank-out the endpoint.
+func SetResolveEndpoint(url string) {
+	if url == "" {
+		return
+	}
+	resolveEndpoint = url
+}
 
 // ResolveComplaint marks a complaint as resolved on the DGVCL website.
 //
@@ -36,7 +56,7 @@ import (
 // Returns:
 //   - error: API call failure or HTTP error, nil on success
 func ResolveComplaint(sc *session.Client, apiID string, remark string, debugMode bool) error {
-	apiURL := "https://complaint.dgvcl.com/api/complaint-assign-process"
+	apiURL := resolveEndpoint
 
 	formData := url.Values{
 		"complaint_id":        {apiID},
@@ -54,8 +74,10 @@ func ResolveComplaint(sc *session.Client, apiID string, remark string, debugMode
 		return nil
 	}
 
+	metrics.ResolveCallsTotal.Inc()
 	responseBody, err := sc.PostForm(apiURL, formData)
 	if err != nil {
+		metrics.ResolveFailuresTotal.Inc()
 		return fmt.Errorf("failed to execute API call: %w", err)
 	}
 
@@ -63,6 +85,7 @@ func ResolveComplaint(sc *session.Client, apiID string, remark string, debugMode
 
 	// Check for API error
 	if strings.HasPrefix(responseText, "ERROR:") {
+		metrics.ResolveFailuresTotal.Inc()
 		return fmt.Errorf("API call failed: %s", responseText[6:])
 	}
 

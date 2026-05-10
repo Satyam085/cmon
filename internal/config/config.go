@@ -16,6 +16,7 @@ import (
 	"fmt"
 	"os"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/joho/godotenv"
@@ -42,6 +43,7 @@ type Config struct {
 	// URLs for the DGVCL portal
 	LoginURL     string // Login page URL
 	ComplaintURL string // Dashboard URL with filters applied
+	ResolveURL   string // POST endpoint that marks a complaint as resolved
 
 	// Authentication credentials (required)
 	Username string // DGVCL portal username
@@ -65,6 +67,12 @@ type Config struct {
 	TelegramBotToken string // Telegram bot API token
 	TelegramChatID   string // Telegram chat ID for notifications
 
+	// TelegramBeltRoutes maps a canonical belt key to a Telegram chat ID
+	// override. Complaints whose belt is in the map are routed to the
+	// matching chat instead of TelegramChatID. Empty disables routing.
+	// Parsed from TELEGRAM_BELT_ROUTES env, format: "belt=chatID,belt=chatID".
+	TelegramBeltRoutes map[string]string
+
 	// WhatsApp configuration (optional)
 	WhatsAppRecipientJID  string // Target JID, e.g. 919876543210@s.whatsapp.net
 	WhatsAppDBPath        string // Path to SQLite session DB (default: whatsapp.db)
@@ -72,6 +80,16 @@ type Config struct {
 
 	// Health check server configuration
 	HealthCheckPort string // Port for health check HTTP server
+
+	// LogFormat selects the structured logger output: "text" (terminal-friendly
+	// logfmt-style) or "json" (parseable by log aggregators). Defaults to "text".
+	LogFormat string
+
+	// ScheduledSummaries is a list of HH:MM (IST) times at which the daemon
+	// will auto-post a /summary cycle to Telegram + WhatsApp. Empty disables
+	// the feature. Parsed in LoadConfig from a comma-separated env value
+	// like "09:00,18:00".
+	ScheduledSummaries []string
 
 	// Debug mode - skips actual API calls for testing
 	DebugMode bool
@@ -129,6 +147,7 @@ func LoadConfig() (*Config, error) {
 		// URLs - can be overridden via env vars if portal URLs change
 		LoginURL:     getEnvOrDefault("LOGIN_URL", "https://complaint.dgvcl.com/"),
 		ComplaintURL: getEnvOrDefault("COMPLAINT_URL", "https://complaint.dgvcl.com/dashboard_complaint_list?from_date=&to_date=&honame=1&coname=21&doname=24&sdoname=87&cStatus=2&commobile="),
+		ResolveURL:   getEnvOrDefault("DGVCL_RESOLVE_URL", "https://complaint.dgvcl.com/api/complaint-assign-process"),
 
 		// Authentication - REQUIRED, no defaults
 		Username: os.Getenv("DGVCL_USERNAME"),
@@ -149,16 +168,25 @@ func LoadConfig() (*Config, error) {
 		WaitTimeout:       getEnvDuration("WAIT_TIMEOUT", 45*time.Second),       // 45s for element waits
 
 		// Telegram - optional, notifications disabled if not set
-		TelegramBotToken: os.Getenv("TELEGRAM_BOT_TOKEN"),
-		TelegramChatID:   os.Getenv("TELEGRAM_CHAT_ID"),
+		TelegramBotToken:   os.Getenv("TELEGRAM_BOT_TOKEN"),
+		TelegramChatID:     os.Getenv("TELEGRAM_CHAT_ID"),
+		TelegramBeltRoutes: parseBeltRoutes(os.Getenv("TELEGRAM_BELT_ROUTES")),
 
-		// WhatsApp - optional, notifications disabled if not set
+		// WhatsApp - optional, notifications disabled if not set.
+		// Resolve-by-reply defaults to true now that the flow is fully
+		// scaffolded; set WHATSAPP_RESOLVE_ENABLED=false to disable.
 		WhatsAppRecipientJID:   os.Getenv("WHATSAPP_RECIPIENT_JID"),
 		WhatsAppDBPath:         getEnvOrDefault("WHATSAPP_DB_PATH", "whatsapp.db"),
-		WhatsAppResolveEnabled: getEnvOrDefault("WHATSAPP_RESOLVE_ENABLED", "false") == "true",
+		WhatsAppResolveEnabled: getEnvOrDefault("WHATSAPP_RESOLVE_ENABLED", "true") == "true",
 
 		// Health check - default port 8080
 		HealthCheckPort: getEnvOrDefault("HEALTH_CHECK_PORT", "8080"),
+
+		// Log format - default text mode for terminal use
+		LogFormat: getEnvOrDefault("LOG_FORMAT", "text"),
+
+		// Scheduled summaries - empty by default (feature opt-in).
+		ScheduledSummaries: parseScheduleList(os.Getenv("SCHEDULED_SUMMARIES")),
 
 		// Debug mode - default false (production mode)
 		DebugMode: getEnvOrDefault("DEBUG_MODE", "false") == "true",
@@ -250,6 +278,82 @@ func getEnvFloat(key string, defaultValue float64) float64 {
 		}
 	}
 	return defaultValue
+}
+
+// parseBeltRoutes turns "dahod=-1001234, bajipura=-1005678" into a map
+// keyed by lowercase belt name. Tokens that don't fit the
+// "<key>=<chat_id>" shape are dropped silently — strict parsing keeps the
+// scheduler from sending to a half-typed chat ID. Empty input → nil.
+//
+// Belt keys are lowercased for case-insensitive matching against canonical
+// belt names returned by belt.Resolve, but the chat ID is stored verbatim
+// because Telegram chat IDs include a leading "-" (group/channel marker).
+func parseBeltRoutes(raw string) map[string]string {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return nil
+	}
+	out := map[string]string{}
+	for _, tok := range strings.Split(raw, ",") {
+		tok = strings.TrimSpace(tok)
+		if tok == "" {
+			continue
+		}
+		eq := strings.IndexByte(tok, '=')
+		if eq <= 0 || eq == len(tok)-1 {
+			continue
+		}
+		key := strings.ToLower(strings.TrimSpace(tok[:eq]))
+		chatID := strings.TrimSpace(tok[eq+1:])
+		if key == "" || chatID == "" {
+			continue
+		}
+		out[key] = chatID
+	}
+	if len(out) == 0 {
+		return nil
+	}
+	return out
+}
+
+// parseScheduleList turns "09:00, 18:00" into ["09:00", "18:00"]. Tokens
+// that don't match HH:MM (24-hour) are dropped — strict parsing keeps the
+// scheduler from firing at surprising times if someone fat-fingers an entry.
+// An empty input yields a nil slice.
+func parseScheduleList(raw string) []string {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return nil
+	}
+	out := []string{}
+	for _, tok := range strings.Split(raw, ",") {
+		tok = strings.TrimSpace(tok)
+		if tok == "" {
+			continue
+		}
+		if !validHHMM(tok) {
+			continue
+		}
+		out = append(out, tok)
+	}
+	return out
+}
+
+// validHHMM checks the 24-hour HH:MM format. Strictly two digits for both
+// fields so "9:5" doesn't smuggle in an off-by-an-hour misinterpretation.
+func validHHMM(s string) bool {
+	if len(s) != 5 || s[2] != ':' {
+		return false
+	}
+	hh, err := strconv.Atoi(s[:2])
+	if err != nil || hh < 0 || hh > 23 {
+		return false
+	}
+	mm, err := strconv.Atoi(s[3:])
+	if err != nil || mm < 0 || mm > 59 {
+		return false
+	}
+	return true
 }
 
 // getEnvDuration returns the environment variable as a duration or a default if not set/invalid.

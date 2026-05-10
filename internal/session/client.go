@@ -19,7 +19,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
-	"log"
+	"log/slog"
 	"math/rand"
 	"net/http"
 	"net/http/cookiejar"
@@ -121,7 +121,7 @@ func (c *Client) Reset() error {
 		return fmt.Errorf("failed to reset cookie jar: %w", err)
 	}
 	c.http.Jar = jar
-	log.Println("  ✓ Session reset (token cleared)")
+	slog.Info("session reset (token cleared)")
 	return nil
 }
 
@@ -155,7 +155,7 @@ func (c *Client) Login(loginURL, username, password string) error {
 		csrfToken = loginDoc.Find(`input[name="_token"]`).AttrOr("value", "")
 	}
 	if csrfToken == "" {
-		log.Println("  ⚠️  No CSRF token found — proceeding without it")
+		slog.Warn("no CSRF token found on login page; proceeding without it")
 	}
 
 	// Step 3: Extract and solve captcha
@@ -204,7 +204,10 @@ func (c *Client) Login(loginURL, username, password string) error {
 	}
 	defer resp.Body.Close()
 
-	respBody, _ := io.ReadAll(resp.Body)
+	respBody, readErr := io.ReadAll(resp.Body)
+	if readErr != nil {
+		return errors.NewLoginFailedError("failed to read login response body", readErr)
+	}
 
 	if resp.StatusCode != http.StatusOK {
 		return errors.NewLoginFailedError(fmt.Sprintf("login API returned HTTP %d: %s", resp.StatusCode, string(respBody)), nil)
@@ -400,8 +403,11 @@ func (c *Client) do(req *http.Request) (*http.Response, error) {
 		io.Copy(io.Discard, resp.Body)
 		resp.Body.Close()
 
-		log.Printf("  ⏳ HTTP 429 from %s — backing off %s (attempt %d/%d)",
-			req.URL.String(), wait.Round(time.Millisecond), attempt+1, c.maxRetries429)
+		slog.Warn("HTTP 429, backing off",
+			"url", req.URL.String(),
+			"wait", wait.Round(time.Millisecond),
+			"attempt", attempt+1,
+			"max_attempts", c.maxRetries429)
 
 		timer := time.NewTimer(wait)
 		select {
@@ -468,7 +474,7 @@ func solveCaptcha(text string) (string, error) {
 		// Fallback: whitespace-split
 		parts := strings.Fields(text)
 		if len(parts) < 3 {
-			log.Printf("  ⚠️  Captcha raw text (parse failed): %q", text)
+			slog.Warn("captcha parse failed", "raw", text)
 			return "", fmt.Errorf("invalid captcha format: %q", text)
 		}
 		var err1, err2 error
@@ -476,7 +482,7 @@ func solveCaptcha(text string) (string, error) {
 		b, err2 = strconv.Atoi(parts[2])
 		op = parts[1]
 		if err1 != nil || err2 != nil {
-			log.Printf("  ⚠️  Captcha raw text (number parse failed): %q", text)
+			slog.Warn("captcha number parse failed", "raw", text)
 			return "", fmt.Errorf("invalid captcha numbers in %q", text)
 		}
 	}
@@ -489,7 +495,7 @@ func solveCaptcha(text string) (string, error) {
 	case "×", "x", "X", "*":
 		return strconv.Itoa(a * b), nil
 	default:
-		log.Printf("  ⚠️  Unknown captcha operator %q in %q", op, text)
+		slog.Warn("unknown captcha operator", "operator", op, "raw", text)
 		return "", fmt.Errorf("unknown captcha operator %q in %q", op, text)
 	}
 }

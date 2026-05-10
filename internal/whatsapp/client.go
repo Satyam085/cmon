@@ -31,6 +31,8 @@ import (
 	"time"
 
 	"cmon/internal/belt"
+	"cmon/internal/complaintid"
+	"cmon/internal/metrics"
 
 	_ "modernc.org/sqlite"
 
@@ -46,6 +48,11 @@ import (
 	waLog "go.mau.fi/whatsmeow/util/log"
 	"google.golang.org/protobuf/proto"
 )
+
+// requestTimeout caps a single WhatsApp request (send / upload / list-groups)
+// so a stalled connection cannot hang a goroutine indefinitely. Network I/O
+// previously used context.Background() with no deadline.
+const requestTimeout = 30 * time.Second
 
 // Client wraps a whatsmeow client and target recipient JID.
 //
@@ -171,14 +178,18 @@ func (c *Client) SendComplaintMessage(text, complaintNumber string, storI interf
 		return nil
 	}
 
+	ctx, cancel := context.WithTimeout(context.Background(), requestTimeout)
+	defer cancel()
 	resp, err := c.wm.SendMessage(
-		context.Background(),
+		ctx,
 		c.recipientJID,
 		&waProto.Message{Conversation: proto.String(text)},
 	)
 	if err != nil {
+		metrics.WhatsAppSendFailuresTotal.Inc()
 		return fmt.Errorf("failed to send WhatsApp complaint message: %w", err)
 	}
+	metrics.WhatsAppSendsTotal.Inc()
 
 	// Persist WA Message ID to SQLite for reply-to-resolve
 	if stor, ok := storI.(storageSetter); ok {
@@ -204,27 +215,45 @@ func (c *Client) SendMessage(text string) error {
 		return nil
 	}
 
+	ctx, cancel := context.WithTimeout(context.Background(), requestTimeout)
+	defer cancel()
 	_, err := c.wm.SendMessage(
-		context.Background(),
+		ctx,
 		c.recipientJID,
 		&waProto.Message{Conversation: proto.String(text)},
 	)
 	if err != nil {
+		metrics.WhatsAppSendFailuresTotal.Inc()
 		return fmt.Errorf("failed to send WhatsApp message: %w", err)
 	}
+	metrics.WhatsAppSendsTotal.Inc()
 
 	return nil
 }
 
 // sendImage uploads and sends a PNG image to the recipient.
-// Falls back to sending plain-text summary if upload fails.
-func (c *Client) sendImage(imgBytes []byte, caption string) error {
-	uploaded, err := c.wm.Upload(context.Background(), imgBytes, whatsmeow.MediaImage)
+// Falls back to sending plain-text summary if upload fails. The parent ctx is
+// honoured (per-call timeout layered on top) so a shutting-down event loop
+// cancels in-flight uploads and sends.
+func (c *Client) sendImage(ctx context.Context, imgBytes []byte, caption string) (err error) {
+	defer func() {
+		if err != nil {
+			metrics.WhatsAppSendFailuresTotal.Inc()
+		} else {
+			metrics.WhatsAppSendsTotal.Inc()
+		}
+	}()
+
+	uploadCtx, uploadCancel := context.WithTimeout(ctx, requestTimeout)
+	defer uploadCancel()
+	uploaded, err := c.wm.Upload(uploadCtx, imgBytes, whatsmeow.MediaImage)
 	if err != nil {
 		return fmt.Errorf("failed to upload image: %w", err)
 	}
 
-	_, err = c.wm.SendMessage(context.Background(), c.recipientJID, &waProto.Message{
+	sendCtx, sendCancel := context.WithTimeout(ctx, requestTimeout)
+	defer sendCancel()
+	_, err = c.wm.SendMessage(sendCtx, c.recipientJID, &waProto.Message{
 		ImageMessage: &waProto.ImageMessage{
 			Caption:       proto.String(caption),
 			Mimetype:      proto.String("image/png"),
@@ -297,14 +326,14 @@ func (c *Client) HandleEvents(ctx context.Context, sc *session.Client, stor inte
 		// Handle /summarybelt command (per-belt images)
 		if lower == "/summarybelt" {
 			log.Println("📊 WhatsApp /summarybelt command received")
-			go c.handleSummaryBeltCommand(sc, stor)
+			go c.handleSummaryBeltCommand(ctx, sc, stor)
 			return
 		}
 
 		// Handle /summary command
 		if lower == "/summary" {
 			log.Println("📊 WhatsApp /summary command received")
-			go c.handleSummaryCommand(sc, stor)
+			go c.handleSummaryCommand(ctx, sc, stor)
 			return
 		}
 
@@ -348,7 +377,7 @@ func (c *Client) HandleEvents(ctx context.Context, sc *session.Client, stor inte
 			}
 
 			log.Printf("📝 WhatsApp resolve request for complaint %s (remark: %s)", complaintNumber, remark)
-			go c.handleResolve(sc, storRslv, tg, complaintNumber, quotedID, remark, debugMode)
+			go c.handleResolve(ctx, sc, storRslv, tg, complaintNumber, quotedID, remark, debugMode)
 		}
 	})
 
@@ -358,8 +387,19 @@ func (c *Client) HandleEvents(ctx context.Context, sc *session.Client, stor inte
 	log.Println("🛑 WhatsApp event handler stopped")
 }
 
+// PostScheduledSummary triggers the /summary flow as if a user had typed it
+// in the chat. Exposed for the scheduler in main.go.
+func (c *Client) PostScheduledSummary(ctx context.Context, sc *session.Client, stor interface{}) {
+	c.handleSummaryCommand(ctx, sc, stor)
+}
+
 // handleSummaryCommand fetches all pending complaints and sends a summary image.
-func (c *Client) handleSummaryCommand(sc *session.Client, storI interface{}) {
+// ctx is the parent HandleEvents context; if it is cancelled mid-handler the
+// remaining steps are skipped so a shutdown does not block on follow-up sends.
+func (c *Client) handleSummaryCommand(ctx context.Context, sc *session.Client, storI interface{}) {
+	if ctx.Err() != nil {
+		return
+	}
 	c.SendMessage("📊 Generating summary... please wait.")
 
 	// Type-assert storage
@@ -376,6 +416,9 @@ func (c *Client) handleSummaryCommand(sc *session.Client, storI interface{}) {
 		c.SendMessage("ℹ️ No pending complaints found.")
 		return
 	}
+	if ctx.Err() != nil {
+		return
+	}
 
 	// Render combined table as PNG
 	imgBytes, err := renderSummaryImage(complaints)
@@ -384,9 +427,12 @@ func (c *Client) handleSummaryCommand(sc *session.Client, storI interface{}) {
 		c.SendMessage(fmt.Sprintf("❌ Failed to render summary image: %v", err))
 		return
 	}
+	if ctx.Err() != nil {
+		return
+	}
 
 	caption := fmt.Sprintf("📋 %d Pending Complaints", len(complaints))
-	if err := c.sendImage(imgBytes, caption); err != nil {
+	if err := c.sendImage(ctx, imgBytes, caption); err != nil {
 		log.Printf("⚠️  WhatsApp summary image send failed: %v", err)
 		c.SendMessage(buildTextSummary(complaints))
 		return
@@ -394,8 +440,12 @@ func (c *Client) handleSummaryCommand(sc *session.Client, storI interface{}) {
 }
 
 // handleSummaryBeltCommand fetches all pending complaints and sends one image
-// per belt (via /summarybelt).
-func (c *Client) handleSummaryBeltCommand(sc *session.Client, storI interface{}) {
+// per belt (via /summarybelt). Honours ctx cancellation between belts so a
+// long burst can be aborted on shutdown.
+func (c *Client) handleSummaryBeltCommand(ctx context.Context, sc *session.Client, storI interface{}) {
+	if ctx.Err() != nil {
+		return
+	}
 	c.SendMessage("📊 Generating belt-wise summary... please wait.")
 
 	stor, ok := storI.(summaryStorage)
@@ -410,6 +460,9 @@ func (c *Client) handleSummaryBeltCommand(sc *session.Client, storI interface{})
 		c.SendMessage("ℹ️ No pending complaints found.")
 		return
 	}
+	if ctx.Err() != nil {
+		return
+	}
 
 	beltImages, err := renderSummaryImages(complaints)
 	if err != nil {
@@ -420,8 +473,11 @@ func (c *Client) handleSummaryBeltCommand(sc *session.Client, storI interface{})
 
 	var sendErrs int
 	for _, bi := range beltImages {
+		if ctx.Err() != nil {
+			return
+		}
 		caption := fmt.Sprintf("📋 %s Belt — %d Pending Complaints", bi.Label, bi.Count)
-		if err := c.sendImage(bi.PNG, caption); err != nil {
+		if err := c.sendImage(ctx, bi.PNG, caption); err != nil {
 			log.Printf("⚠️  WhatsApp belt summary image send failed for %s: %v", bi.Label, err)
 			sendErrs++
 		}
@@ -434,7 +490,12 @@ func (c *Client) handleSummaryBeltCommand(sc *session.Client, storI interface{})
 }
 
 // handleResolve resolves a complaint via the DGVCL API and updates tracking.
-func (c *Client) handleResolve(sc *session.Client, stor resolveStorage, tg *telegram.Client, complaintNumber, waMessageID, remark string, debugMode bool) {
+// ctx is the parent HandleEvents context; checked at major boundaries so a
+// shutdown skips further work after the API call returns.
+func (c *Client) handleResolve(ctx context.Context, sc *session.Client, stor resolveStorage, tg *telegram.Client, complaintNumber, waMessageID, remark string, debugMode bool) {
+	if ctx.Err() != nil {
+		return
+	}
 	// Look up API ID
 	apiID := stor.GetAPIID(complaintNumber)
 	if apiID == "" {
@@ -473,7 +534,7 @@ func (c *Client) handleResolve(sc *session.Client, stor resolveStorage, tg *tele
 			time.Now().Format("02 Jan 2006, 03:04 PM"),
 		)
 
-		if err := tg.EditMessageText(tg.ChatID, messageID, resolvedMessage); err != nil {
+		if err := tg.EditMessageText(tg.ChatIDForBelt(stor.GetBelt(complaintNumber)), messageID, resolvedMessage); err != nil {
 			log.Printf("⚠️  WhatsApp resolved %s on website but failed to edit Telegram message: %v", complaintNumber, err)
 			telegramEditFailed = true
 		}
@@ -505,7 +566,9 @@ func (c *Client) ListGroups() {
 		return
 	}
 
-	groups, err := c.wm.GetJoinedGroups(context.Background())
+	ctx, cancel := context.WithTimeout(context.Background(), requestTimeout)
+	defer cancel()
+	groups, err := c.wm.GetJoinedGroups(ctx)
 	if err != nil {
 		log.Printf("⚠️  Could not fetch WhatsApp groups: %v", err)
 		return
@@ -547,6 +610,7 @@ type resolveStorage interface {
 	GetComplaintIDByWAMessageID(waMessageID string) (string, bool)
 	GetConsumerName(complaintNumber string) string
 	GetMessageID(complaintNumber string) string
+	GetBelt(complaintNumber string) string
 	Exists(complaintNumber string) bool
 	Remove(complaintNumber string) error
 }
@@ -581,6 +645,9 @@ func defaultResolveComplaintAPI(sc *session.Client, apiID, remark string, debugM
 	return resolveOnWebsite(sc, apiID, remark, debugMode)
 }
 
+// extractComplaintNumberFromQuotedMessage walks every text-bearing field on a
+// quoted WhatsApp message (conversation, extended text, image / video /
+// document captions) and returns the first complaint number it can parse.
 func extractComplaintNumberFromQuotedMessage(msg *waProto.Message) string {
 	if msg == nil {
 		return ""
@@ -595,28 +662,9 @@ func extractComplaintNumberFromQuotedMessage(msg *waProto.Message) string {
 	}
 
 	for _, text := range candidates {
-		if complaintNumber := extractComplaintNumberFromText(text); complaintNumber != "" {
-			return complaintNumber
+		if number := complaintid.FromText(text); number != "" {
+			return number
 		}
-	}
-
-	return ""
-}
-
-func extractComplaintNumberFromText(text string) string {
-	text = strings.TrimSpace(text)
-	if text == "" {
-		return ""
-	}
-
-	const prefix = "📋 Complaint:"
-	for _, line := range strings.Split(text, "\n") {
-		line = strings.TrimSpace(line)
-		if !strings.HasPrefix(line, prefix) {
-			continue
-		}
-
-		return strings.TrimSpace(strings.TrimPrefix(line, prefix))
 	}
 
 	return ""

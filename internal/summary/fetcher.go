@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"log"
 	"sync"
+	"time"
 
 	"cmon/internal/session"
 	"cmon/internal/storage"
@@ -73,6 +74,7 @@ func FetchAllPendingDetails(sc *session.Client, stor *storage.Storage) ([]Compla
 
 // buildFromStorage assembles a Complaint entirely from cached storage values.
 func buildFromStorage(stor *storage.Storage, complaintID, apiID string) Complaint {
+	date := stor.GetComplainDate(complaintID)
 	return Complaint{
 		ComplainNo:        complaintID,
 		Name:              stor.GetConsumerName(complaintID),
@@ -82,10 +84,11 @@ func buildFromStorage(stor *storage.Storage, complaintID, apiID string) Complain
 		Village:           stor.GetVillage(complaintID),
 		Belt:              stor.GetBelt(complaintID),
 		Description:       stor.GetDescription(complaintID),
-		ComplainDate:      stor.GetComplainDate(complaintID),
+		ComplainDate:      date,
 		TelegramMessageID: stor.GetMessageID(complaintID),
 		WhatsAppMessageID: stor.GetWAMessageID(complaintID),
 		APIID:             apiID,
+		AgeMinutes:        computeAgeMinutes(date, time.Now()),
 	}
 }
 
@@ -181,6 +184,7 @@ func fetchAndPersistDetail(sc *session.Client, stor *storage.Storage, complaintI
 		TelegramMessageID: stor.GetMessageID(complaintID),
 		WhatsAppMessageID: stor.GetWAMessageID(complaintID),
 		APIID:             apiID,
+		AgeMinutes:        computeAgeMinutes(date, time.Now()),
 	}, nil
 }
 

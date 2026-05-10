@@ -29,16 +29,20 @@ import (
 	"log"
 	"os"
 	"os/signal"
+	"strconv"
 	"sync"
 	"syscall"
 	"time"
 	_ "time/tzdata"
 
+	"cmon/internal/api"
 	"cmon/internal/auth"
 	"cmon/internal/complaint"
 	"cmon/internal/config"
 	"cmon/internal/errors"
 	"cmon/internal/health"
+	"cmon/internal/logging"
+	"cmon/internal/metrics"
 	"cmon/internal/session"
 	"cmon/internal/storage"
 	"cmon/internal/telegram"
@@ -48,6 +52,20 @@ import (
 
 // fetchMu prevents concurrent scrape cycles (ticker vs dashboard refresh).
 var fetchMu sync.Mutex
+
+// daemonDeps bundles every long-lived dependency the daemon's hot paths
+// (fetch, login retry, scheduler, dashboard refresh) need. Pulled out to
+// keep helper signatures readable — fetchWithRetry would otherwise take 13
+// positional arguments.
+type daemonDeps struct {
+	cfg           *config.Config
+	sc            *session.Client
+	stor          *storage.Storage
+	tg            *telegram.Client
+	wa            *whatsapp.Client
+	translator    *translate.Translator
+	healthMonitor *health.Monitor
+}
 
 func main() {
 	// Force Indian Standard Time (IST) for all time operations
@@ -64,30 +82,41 @@ func main() {
 		log.Fatal("❌ Configuration error:", err)
 	}
 
-	// Initialize storage
-	stor := storage.New()
-	defer func() {
-		if err := stor.Close(); err != nil {
-			log.Printf("⚠️  Failed to close database: %v", err)
-		}
-	}()
+	// Install slog as the application-wide structured logger and reroute the
+	// stdlib log package through it. Done as soon as config is parsed so every
+	// subsequent log line is in the configured format.
+	logging.Setup(cfg.LogFormat)
+
+	// Point the DGVCL resolve client at the configured endpoint. Default
+	// matches production; override via DGVCL_RESOLVE_URL for staging.
+	api.SetResolveEndpoint(cfg.ResolveURL)
+
+	// Initialize storage. Closed at the very end of the graceful shutdown
+	// sequence — never via defer — so it cannot run while a goroutine is
+	// still mid-write. See the explicit shutdown block at the bottom of main.
+	stor, err := storage.New()
+	if err != nil {
+		log.Fatalf("❌ Failed to initialize storage: %v", err)
+	}
+
+	// Live gauge: cmon_open_complaints{belt=...}. Read from storage at scrape
+	// time so the value can never drift from the source of truth.
+	metrics.RegisterOpenComplaintsByBelt(stor.GetPendingCountsByBelt)
 
 	// Step 3: Initialize Telegram client (optional)
 	tg := telegram.NewClient()
+	if tg != nil && len(cfg.TelegramBeltRoutes) > 0 {
+		tg.BeltRoutes = cfg.TelegramBeltRoutes
+		log.Printf("✓ Telegram per-belt routing enabled for %d belt(s)", len(cfg.TelegramBeltRoutes))
+	}
 
 	// Step 3a: Initialize WhatsApp client (optional)
 	wa := whatsapp.NewClient()
-	if wa != nil {
-		defer wa.Disconnect()
-	}
 
 	// Step 3b: Initialize Gemini Translator (optional)
 	translator, err := translate.NewTranslator(context.Background(), cfg.GeminiAPIKey, cfg)
 	if err != nil {
 		log.Printf("⚠️  Translator init failed (translation disabled): %v", err)
-	}
-	if translator != nil {
-		defer translator.Close()
 	}
 
 	// Step 4: Initialize health monitor
@@ -100,6 +129,17 @@ func main() {
 	}
 	log.Println("✓ Session client created")
 
+	// Bundle the long-lived state so helpers don't take 13 positional args.
+	deps := &daemonDeps{
+		cfg:           cfg,
+		sc:            sc,
+		stor:          stor,
+		tg:            tg,
+		wa:            wa,
+		translator:    translator,
+		healthMonitor: healthMonitor,
+	}
+
 	// Build the refresh function that the dashboard can call to trigger a scrape.
 	// Uses TryLock so concurrent refresh requests return immediately instead of queuing.
 	refreshFn := func() error {
@@ -107,77 +147,36 @@ func main() {
 			return fmt.Errorf("a scrape cycle is already in progress, please wait")
 		}
 		defer fetchMu.Unlock()
-		return fetchWithRetry(
-			sc, cfg.ComplaintURL, stor, tg, wa,
-			cfg.LoginURL, cfg.Username, cfg.Password,
-			cfg, cfg.MaxFetchRetries, cfg.FetchTimeout,
-			healthMonitor, translator,
-			true, // silent: don't send critical Telegram alerts for dashboard-triggered scrapes
-		)
+		// silent: don't send critical Telegram alerts for dashboard-triggered scrapes
+		return fetchWithRetry(deps, true)
 	}
 
-	// Step 6: Start health check server in background
-	health.StartServer(healthMonitor, cfg.HealthCheckPort, sc, stor, refreshFn)
+	// Step 6: Start health check server in background. Returned *http.Server
+	// is shut down explicitly at the end of main so in-flight requests
+	// (notably /refresh, which holds fetchMu) finish before storage closes.
+	httpServer := health.StartServer(healthMonitor, cfg.HealthCheckPort, sc, stor, refreshFn)
 
-	// Step 7: Start Telegram callback handler if configured
-	if tg != nil {
-		callbackCtx, callbackCancel := context.WithCancel(context.Background())
-		defer callbackCancel()
-		go tg.HandleUpdates(callbackCtx, sc, stor)
-	}
+	// bgWg tracks long-lived background goroutines that must finish before
+	// storage closes. Telegram + WhatsApp handlers can be mid-DB-write when a
+	// shutdown signal arrives; we wait for them rather than racing.
+	var bgWg sync.WaitGroup
 
-	// Step 7a: Start WhatsApp event handler if configured
-	if wa != nil {
-		waCtx, waCancel := context.WithCancel(context.Background())
-		defer waCancel()
-		go wa.HandleEvents(waCtx, sc, stor, tg, cfg.WhatsAppResolveEnabled, cfg.DebugMode)
-	}
+	// Step 7: Telegram + WhatsApp event handlers
+	callbackCancel, waCancel := startBackgroundHandlers(deps, &bgWg)
+	defer callbackCancel()
+	defer waCancel()
 
 	log.Println("🔐 Logging in...")
-	var loginErr error
-	for attempt := 1; attempt <= cfg.MaxLoginRetries; attempt++ {
-		loginErr = auth.Login(sc, cfg.LoginURL, cfg.Username, cfg.Password)
-		if loginErr == nil {
-			log.Println("✓ Logged in")
-			break
-		}
-
-		if attempt < cfg.MaxLoginRetries {
-			log.Printf("   ❌ Login failed: %v", loginErr)
-			log.Printf("   ⏳ Retrying in %v...", cfg.LoginRetryDelay)
-			time.Sleep(cfg.LoginRetryDelay)
-		}
+	if err := loginWithRetry(deps); err != nil {
+		log.Fatal("❌ Login failed:", err)
 	}
-
-	if loginErr != nil {
-		log.Fatal("❌ Login failed:", loginErr)
-	}
+	log.Println("✓ Logged in")
 
 	log.Println("📬 Fetching complaints...")
-	fetchMu.Lock()
-	fetchErr := fetchWithRetry(
-		sc,
-		cfg.ComplaintURL,
-		stor,
-		tg,
-		wa,
-		cfg.LoginURL,
-		cfg.Username,
-		cfg.Password,
-		cfg,
-		cfg.MaxFetchRetries,
-		cfg.FetchTimeout,
-		healthMonitor,
-		translator,
-		false,
-	)
-	fetchMu.Unlock()
-	if fetchErr != nil {
-		log.Fatal("❌ Failed initial fetch after all retries:", fetchErr)
+	if err := triggerFetch(deps, false); err != nil {
+		log.Fatal("❌ Failed initial fetch after all retries:", err)
 	}
-
 	healthMonitor.UpdateFetchStatus("success")
-
 	if health.WSHub != nil {
 		health.WSHub.BroadcastRefresh()
 	}
@@ -189,48 +188,110 @@ func main() {
 	shutdownCtx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
-	// Step 12: Start refresh ticker
-	ticker := time.NewTicker(cfg.FetchInterval)
-	defer ticker.Stop()
+	// Step 11a: Scheduled summaries (cfg.ScheduledSummaries empty → no-op)
+	if len(cfg.ScheduledSummaries) > 0 {
+		bgWg.Add(1)
+		go func() {
+			defer bgWg.Done()
+			runScheduledSummaries(shutdownCtx, cfg.ScheduledSummaries, tg, wa, sc, stor)
+		}()
+	}
 
-	// Step 13: Main refresh loop
-	for {
-		select {
-		case <-shutdownCtx.Done():
-			log.Println("\n🛑 Shutdown signal received, cleaning up...")
-			log.Println("✅ Cleanup complete, shutting down")
-			return
+	// Step 12: Periodic fetch ticker — blocks until shutdownCtx fires.
+	runFetchLoop(shutdownCtx, deps)
 
-		case <-ticker.C:
-			log.Printf("📬 Refreshing — %s", time.Now().Format("15:04:05"))
+	// Graceful shutdown — explicit, ordered, never via defer for state that
+	// matters. Each step has a short timeout so a stuck goroutine cannot
+	// indefinitely block process exit.
+	log.Println("🛑 Shutdown signal received, cleaning up...")
 
-			fetchMu.Lock()
-			fetchErr := fetchWithRetry(
-				sc,
-				cfg.ComplaintURL,
-				stor,
-				tg,
-				wa,
-				cfg.LoginURL,
-				cfg.Username,
-				cfg.Password,
-				cfg,
-				cfg.MaxFetchRetries,
-				cfg.FetchTimeout,
-				healthMonitor,
-				translator,
-				false,
-			)
-			fetchMu.Unlock()
+	// 1. Stop accepting new HTTP requests; wait briefly for in-flight ones
+	//    (notably /refresh, which may hold fetchMu) to drain.
+	httpShutdownCtx, httpCancel := context.WithTimeout(context.Background(), 10*time.Second)
+	if err := httpServer.Shutdown(httpShutdownCtx); err != nil {
+		log.Printf("⚠️  HTTP server shutdown error: %v", err)
+	}
+	httpCancel()
 
-			if fetchErr != nil {
-				log.Println("⚠️  Final error after all retry attempts:", fetchErr)
-			} else if health.WSHub != nil {
-				health.WSHub.BroadcastRefresh()
-			}
+	// 2. Cancel handler contexts so Telegram long-poll and WhatsApp event
+	//    loop start unwinding.
+	callbackCancel()
+	waCancel()
 
-			log.Println("═══════════════════════════════════════════════════════════")
-		}
+	// 3. Wait for the handler goroutines to actually exit. Telegram long-poll
+	//    can hang for up to ~30s on its current request; cap the wait so we
+	//    don't block the operator forever on a wedged upstream.
+	if waited := waitWithTimeout(&bgWg, 35*time.Second); !waited {
+		log.Println("⚠️  Background handlers did not exit within 35s; closing storage anyway")
+	}
+
+	// 4. Acquire fetchMu to make sure no scrape (ticker- or dashboard-triggered)
+	//    is still mid-DB-write. Lock — not TryLock — so this blocks until the
+	//    in-flight scrape finishes. Then we hold it until storage closes.
+	fetchMu.Lock()
+
+	// 5. Disconnect WhatsApp + close translator before storage. WhatsApp's own
+	//    sqlite store is independent of complaint storage, but ordering keeps
+	//    the shutdown log readable.
+	if wa != nil {
+		wa.Disconnect()
+	}
+	if translator != nil {
+		translator.Close()
+	}
+
+	// 6. Close the complaint database last.
+	if err := stor.Close(); err != nil {
+		log.Printf("⚠️  Failed to close database: %v", err)
+	}
+
+	log.Println("✅ Cleanup complete, shutting down")
+}
+
+// recoverSession is the two-step session recovery the fetch retry loop runs
+// when a request comes back with SessionExpiredError. It first attempts a
+// plain re-login on the existing cookie jar; if that fails (e.g. because the
+// jar is in a stuck state), it resets the jar and re-logs in. Returns true
+// when the caller should retry the fetch, false if both attempts failed.
+func recoverSession(sc *session.Client, loginURL, username, password string) bool {
+	log.Println("🔐 Attempting re-login...")
+	if err := auth.Login(sc, loginURL, username, password); err == nil {
+		log.Println("✓ Re-login successful, retrying fetch on next loop...")
+		return true
+	} else {
+		log.Println("❌ Re-login failed:", err)
+	}
+
+	// Plain re-login failed → reset the jar (the browser-restart equivalent)
+	// and try again. If this still fails the caller exits the retry loop.
+	log.Println("🔄 Resetting session (clearing cookies)...")
+	if err := sc.Reset(); err != nil {
+		log.Println("⚠️  Session reset failed:", err)
+	}
+
+	log.Println("🔐 Attempting login after session reset...")
+	if err := auth.Login(sc, loginURL, username, password); err == nil {
+		log.Println("✓ Login successful after session reset, retrying fetch on next loop...")
+		return true
+	} else {
+		log.Println("❌ Login failed even after session reset:", err)
+	}
+	return false
+}
+
+// waitWithTimeout waits for wg with a deadline. Returns true if wg finished
+// within the deadline, false on timeout.
+func waitWithTimeout(wg *sync.WaitGroup, d time.Duration) bool {
+	done := make(chan struct{})
+	go func() {
+		wg.Wait()
+		close(done)
+	}()
+	select {
+	case <-done:
+		return true
+	case <-time.After(d):
+		return false
 	}
 }
 
@@ -242,33 +303,26 @@ func main() {
 //  3. If re-login failed → Reset session (new cookie jar), re-login, and retry
 //  4. Repeat up to maxRetries times
 //  5. If all retries failed → Send critical alert
-func fetchWithRetry(
-	sc *session.Client,
-	complaintURL string,
-	stor *storage.Storage,
-	tg *telegram.Client,
-	wa *whatsapp.Client,
-	loginURL, username, password string,
-	cfg *config.Config,
-	maxRetries int,
-	fetchTimeout time.Duration,
-	healthMonitor *health.Monitor,
-	translator *translate.Translator,
-	silent bool,
-) error {
+//
+// silent suppresses the critical-alert Telegram message — used by the
+// dashboard refresh path where the operator is already watching the page.
+func fetchWithRetry(d *daemonDeps, silent bool) error {
 	var lastErr error
 
-	for attempt := 0; attempt <= maxRetries; attempt++ {
+	metrics.FetchAttemptsTotal.Inc()
+
+	for attempt := 0; attempt <= d.cfg.MaxFetchRetries; attempt++ {
 		if attempt > 0 {
-			log.Printf("🔄 Retry attempt %d/%d...", attempt, maxRetries)
+			log.Printf("🔄 Retry attempt %d/%d...", attempt, d.cfg.MaxFetchRetries)
 		}
 
-		fetcher := complaint.New(sc, stor, tg, wa, cfg, translator)
-		activeComplaintIDs, err := fetcher.FetchAll(complaintURL)
+		fetcher := complaint.New(d.sc, d.stor, d.tg, d.wa, d.cfg, d.translator)
+		activeComplaintIDs, err := fetcher.FetchAll(d.cfg.ComplaintURL)
 
 		if err == nil {
-			markResolvedComplaints(stor, tg, wa, activeComplaintIDs)
-			healthMonitor.UpdateFetchStatus("success")
+			markResolvedComplaints(d.stor, d.tg, d.wa, activeComplaintIDs)
+			d.healthMonitor.UpdateFetchStatus("success")
+			metrics.LastFetchSuccessUnixSeconds.Set(time.Now().Unix())
 			return nil
 		}
 
@@ -276,30 +330,9 @@ func fetchWithRetry(
 
 		if sessionErr, ok := err.(*errors.SessionExpiredError); ok {
 			log.Println("🔄 Session expired:", sessionErr.Message)
-			log.Println("🔐 Attempting re-login...")
-
-			loginErr := auth.Login(sc, loginURL, username, password)
-			if loginErr == nil {
-				log.Println("✓ Re-login successful, retrying fetch on next loop...")
+			if recoverSession(d.sc, d.cfg.LoginURL, d.cfg.Username, d.cfg.Password) {
 				continue
 			}
-
-			// Re-login failed → Reset session (equivalent of restarting browser)
-			log.Println("❌ Re-login failed:", loginErr)
-			log.Println("🔄 Resetting session (clearing cookies)...")
-
-			if resetErr := sc.Reset(); resetErr != nil {
-				log.Println("⚠️  Session reset failed:", resetErr)
-			}
-
-			log.Println("🔐 Attempting login after session reset...")
-			loginErr2 := auth.Login(sc, loginURL, username, password)
-			if loginErr2 == nil {
-				log.Println("✓ Login successful after session reset, retrying fetch on next loop...")
-				continue
-			}
-
-			log.Println("❌ Login failed even after session reset:", loginErr2)
 		} else {
 			log.Println("⚠️  Error fetching complaints:", err)
 			time.Sleep(5 * time.Second)
@@ -308,21 +341,99 @@ func fetchWithRetry(
 
 	log.Println("❌ All retry attempts failed.")
 
-	healthMonitor.UpdateFetchStatus(fmt.Sprintf("error: %v", lastErr))
+	metrics.FetchFailuresTotal.Inc()
+	d.healthMonitor.UpdateFetchStatus(fmt.Sprintf("error: %v", lastErr))
 
-	if !silent && tg != nil {
+	if !silent && d.tg != nil {
 		log.Println("🚨 Sending critical failure alert...")
-		alertErr := tg.SendCriticalAlert(
+		alertErr := d.tg.SendCriticalAlert(
 			"Fetch/Login Failure",
-			fmt.Sprintf("Unable to fetch complaints after %d attempts. Last error: %v", maxRetries, lastErr),
-			maxRetries,
+			fmt.Sprintf("Unable to fetch complaints after %d attempts. Last error: %v", d.cfg.MaxFetchRetries, lastErr),
+			d.cfg.MaxFetchRetries,
 		)
 		if alertErr != nil {
 			log.Println("⚠️  Failed to send Telegram alert:", alertErr)
 		}
 	}
 
-	return fmt.Errorf("all %d retry attempts failed: %w", maxRetries, lastErr)
+	return fmt.Errorf("all %d retry attempts failed: %w", d.cfg.MaxFetchRetries, lastErr)
+}
+
+// triggerFetch wraps fetchWithRetry with the fetchMu lock held. Every scrape
+// (initial, ticker, dashboard /refresh, scheduled) goes through this so the
+// lock contract is enforced in one place.
+func triggerFetch(d *daemonDeps, silent bool) error {
+	fetchMu.Lock()
+	defer fetchMu.Unlock()
+	return fetchWithRetry(d, silent)
+}
+
+// loginWithRetry is the boot-time login loop. Runs up to MaxLoginRetries
+// times with LoginRetryDelay between attempts. Failure is fatal — the
+// caller is expected to log.Fatal on a non-nil return.
+func loginWithRetry(d *daemonDeps) error {
+	var loginErr error
+	for attempt := 1; attempt <= d.cfg.MaxLoginRetries; attempt++ {
+		loginErr = auth.Login(d.sc, d.cfg.LoginURL, d.cfg.Username, d.cfg.Password)
+		if loginErr == nil {
+			return nil
+		}
+		if attempt < d.cfg.MaxLoginRetries {
+			log.Printf("   ❌ Login failed: %v", loginErr)
+			log.Printf("   ⏳ Retrying in %v...", d.cfg.LoginRetryDelay)
+			time.Sleep(d.cfg.LoginRetryDelay)
+		}
+	}
+	return loginErr
+}
+
+// startBackgroundHandlers spawns the long-lived Telegram and WhatsApp event
+// goroutines and adds them to bgWg so the shutdown sequence can wait for
+// them. Returns the cancel funcs the shutdown sequence calls to start the
+// unwind.
+func startBackgroundHandlers(d *daemonDeps, bgWg *sync.WaitGroup) (callbackCancel, waCancel context.CancelFunc) {
+	callbackCtx, cbCancel := context.WithCancel(context.Background())
+	if d.tg != nil {
+		bgWg.Add(1)
+		go func() {
+			defer bgWg.Done()
+			d.tg.HandleUpdates(callbackCtx, d.sc, d.stor)
+		}()
+	}
+
+	waCtx, wCancel := context.WithCancel(context.Background())
+	if d.wa != nil {
+		bgWg.Add(1)
+		go func() {
+			defer bgWg.Done()
+			d.wa.HandleEvents(waCtx, d.sc, d.stor, d.tg, d.cfg.WhatsAppResolveEnabled, d.cfg.DebugMode)
+		}()
+	}
+
+	return cbCancel, wCancel
+}
+
+// runFetchLoop blocks on the periodic fetch ticker until shutdownCtx is
+// cancelled, at which point it returns so the caller can run the graceful
+// shutdown sequence.
+func runFetchLoop(shutdownCtx context.Context, d *daemonDeps) {
+	ticker := time.NewTicker(d.cfg.FetchInterval)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-shutdownCtx.Done():
+			return
+		case <-ticker.C:
+			log.Printf("📬 Refreshing — %s", time.Now().Format("15:04:05"))
+			if err := triggerFetch(d, false); err != nil {
+				log.Println("⚠️  Final error after all retry attempts:", err)
+			} else if health.WSHub != nil {
+				health.WSHub.BroadcastRefresh()
+			}
+			log.Println("═══════════════════════════════════════════════════════════")
+		}
+	}
 }
 
 // markResolvedComplaints checks for complaints that were previously seen
@@ -359,7 +470,7 @@ func markResolvedComplaints(stor *storage.Storage, tg *telegram.Client, wa *what
 			if tg != nil {
 				if messageID == "" {
 					log.Printf("⚠️  Complaint %s has no Telegram message ID; removing from storage based on website state", complaintID)
-				} else if err := tg.EditMessageText(tg.ChatID, messageID, resolvedMessage); err != nil {
+				} else if err := tg.EditMessageText(tg.ChatIDForBelt(stor.GetBelt(complaintID)), messageID, resolvedMessage); err != nil {
 					log.Printf("⚠️  Failed to edit message for complaint %s: %v", complaintID, err)
 				}
 			}
@@ -388,4 +499,83 @@ func markResolvedComplaints(stor *storage.Storage, tg *telegram.Client, wa *what
 	if resolvedCount > 0 {
 		log.Printf("🎉 Marked %d complaints as resolved", resolvedCount)
 	}
+}
+
+// runScheduledSummaries blocks until ctx is cancelled, firing a Telegram +
+// WhatsApp /summary at each configured HH:MM (IST) entry. The schedule is
+// re-computed every iteration off time.Now() so a config-driven daemon can
+// be paused for a long time and still pick the right next slot.
+//
+// schedules entries are HH:MM strings; pre-validated by config.parseScheduleList.
+func runScheduledSummaries(
+	ctx context.Context,
+	schedules []string,
+	tg *telegram.Client,
+	wa *whatsapp.Client,
+	sc *session.Client,
+	stor *storage.Storage,
+) {
+	log.Printf("⏰ Scheduled summaries enabled: %v", schedules)
+	for {
+		nextAt, ok := nextScheduledFire(schedules, time.Now())
+		if !ok {
+			// No valid schedule entries — bail rather than hot-loop.
+			log.Printf("⚠️  No valid scheduled summary times; scheduler exiting")
+			return
+		}
+
+		wait := time.Until(nextAt)
+		log.Printf("⏰ Next scheduled summary at %s (in %s)", nextAt.Format("15:04 MST"), wait.Round(time.Second))
+
+		timer := time.NewTimer(wait)
+		select {
+		case <-ctx.Done():
+			timer.Stop()
+			return
+		case <-timer.C:
+		}
+
+		log.Printf("📊 Scheduled /summary firing at %s", time.Now().Format("15:04:05"))
+		if tg != nil {
+			tg.PostScheduledSummary(ctx, sc, stor)
+		}
+		if wa != nil {
+			wa.PostScheduledSummary(ctx, sc, stor)
+		}
+	}
+}
+
+// nextScheduledFire returns the soonest future time at which any HH:MM in
+// schedules will fire, computed in time.Local (IST). Returns ok=false when
+// schedules contains no valid entries — the caller treats that as fatal.
+func nextScheduledFire(schedules []string, now time.Time) (time.Time, bool) {
+	var best time.Time
+	have := false
+	for _, hhmm := range schedules {
+		t, ok := parseHHMMToday(hhmm, now)
+		if !ok {
+			continue
+		}
+		if !t.After(now) {
+			t = t.Add(24 * time.Hour) // already passed today; schedule for tomorrow
+		}
+		if !have || t.Before(best) {
+			best = t
+			have = true
+		}
+	}
+	return best, have
+}
+
+// parseHHMMToday converts "09:00" into today's 09:00 in time.Local.
+func parseHHMMToday(hhmm string, now time.Time) (time.Time, bool) {
+	if len(hhmm) != 5 || hhmm[2] != ':' {
+		return time.Time{}, false
+	}
+	hh, err1 := strconv.Atoi(hhmm[:2])
+	mm, err2 := strconv.Atoi(hhmm[3:])
+	if err1 != nil || err2 != nil || hh < 0 || hh > 23 || mm < 0 || mm > 59 {
+		return time.Time{}, false
+	}
+	return time.Date(now.Year(), now.Month(), now.Day(), hh, mm, 0, 0, now.Location()), true
 }

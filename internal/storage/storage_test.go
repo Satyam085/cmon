@@ -29,7 +29,10 @@ func withTempCWD(t *testing.T) {
 func TestSetMessageIDKeepsMemoryConsistentOnDBFailure(t *testing.T) {
 	withTempCWD(t)
 
-	stor := New()
+	stor, err := New()
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
 	t.Cleanup(func() {
 		_ = stor.Close()
 	})
@@ -57,7 +60,10 @@ func TestSetMessageIDKeepsMemoryConsistentOnDBFailure(t *testing.T) {
 func TestSetWAMessageIDKeepsMemoryConsistentOnDBFailure(t *testing.T) {
 	withTempCWD(t)
 
-	stor := New()
+	stor, err := New()
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
 	t.Cleanup(func() {
 		_ = stor.Close()
 	})
@@ -88,7 +94,10 @@ func TestSetWAMessageIDKeepsMemoryConsistentOnDBFailure(t *testing.T) {
 func TestSaveMultiplePersistsDetailFields(t *testing.T) {
 	withTempCWD(t)
 
-	stor := New()
+	stor, err := New()
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
 	t.Cleanup(func() {
 		_ = stor.Close()
 	})
@@ -149,7 +158,10 @@ func TestReopenIsIdempotent(t *testing.T) {
 
 	// First open — creates the table and runs ensureComplaintColumn for every
 	// column. All ALTERs succeed because the columns don't exist yet.
-	s1 := New()
+	s1, err := New()
+	if err != nil {
+		t.Fatalf("first New: %v", err)
+	}
 	if err := s1.SaveMultiple([]Record{{
 		ComplaintID:  "CMP-1",
 		APIID:        "API-1",
@@ -165,7 +177,10 @@ func TestReopenIsIdempotent(t *testing.T) {
 	// Second open of the same file — every ensureComplaintColumn ALTER now
 	// targets a pre-existing column. The function must swallow the duplicate-
 	// column error rather than fatal. This is the production-upgrade path.
-	s2 := New()
+	s2, err := New()
+	if err != nil {
+		t.Fatalf("second New: %v", err)
+	}
 	t.Cleanup(func() { _ = s2.Close() })
 
 	if !s2.Exists("CMP-1") {
@@ -219,7 +234,10 @@ func TestUpgradeFromLegacySchema(t *testing.T) {
 
 	// Open with the current code — must add the 5 new columns, leave NULL
 	// values readable as empty strings, and preserve the legacy row's data.
-	s := New()
+	s, err := New()
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
 	t.Cleanup(func() { _ = s.Close() })
 
 	if !s.Exists("CMP-LEGACY") {
@@ -253,7 +271,10 @@ func TestUpgradeFromLegacySchema(t *testing.T) {
 func TestRemoveDeletesPendingResolutions(t *testing.T) {
 	withTempCWD(t)
 
-	stor := New()
+	stor, err := New()
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
 	t.Cleanup(func() {
 		_ = stor.Close()
 	})
@@ -282,3 +303,4 @@ func TestRemoveDeletesPendingResolutions(t *testing.T) {
 		t.Fatal("pending resolution should be deleted when complaint is removed")
 	}
 }
+

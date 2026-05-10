@@ -5,7 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"log"
+	"log/slog"
 	"regexp"
 	"strings"
 	"time"
@@ -13,6 +13,7 @@ import (
 	"cmon/internal/belt"
 	"cmon/internal/config"
 	"cmon/internal/errors"
+	"cmon/internal/metrics"
 	"cmon/internal/session"
 	"cmon/internal/storage"
 	"cmon/internal/telegram"
@@ -80,7 +81,7 @@ func (f *Fetcher) FetchAll(baseURL string) ([]string, error) {
 	currentPage := 1
 	for {
 		if currentPage > f.cfg.MaxPages {
-			log.Printf("🛑 Reached maximum page limit (%d). Stopping.", f.cfg.MaxPages)
+			slog.Warn("reached maximum page limit; stopping pagination", "max_pages", f.cfg.MaxPages)
 			break
 		}
 
@@ -212,7 +213,9 @@ func (f *Fetcher) processComplaintsConcurrently(complaints []Link) error {
 
 		if f.translator != nil {
 			texts := []string{name, desc, addr}
-			out, err := f.translator.BatchTranslateToGujarati(context.Background(), texts)
+			translateCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+			out, err := f.translator.BatchTranslateToGujarati(translateCtx, texts)
+			cancel()
 			if err != nil {
 				translations[i] = translationResult{name, desc, addr}
 			} else {
@@ -272,6 +275,7 @@ func (f *Fetcher) processComplaintsConcurrently(complaints []Link) error {
 		if err := f.storage.SaveMultiple(recordsToSave); err != nil {
 			return fmt.Errorf("failed to save complaint records: %w", err)
 		}
+		metrics.ComplaintsSeenTotal.Add(uint64(len(recordsToSave)))
 	}
 
 	// Phase 4: Telegram notifications + message ID persistence
@@ -279,15 +283,15 @@ func (f *Fetcher) processComplaintsConcurrently(complaints []Link) error {
 		for _, n := range notifications {
 			msgID, err := f.tg.SendComplaintMessage(n.ComplaintJSON, n.ComplaintID, n.GujaratiText)
 			if err != nil {
-				log.Printf("    ⚠️  Failed to send Telegram msg for %s: %v", n.ComplaintID, err)
+				slog.Warn("failed to send Telegram complaint message", "complaint", n.ComplaintID, "error", err)
 				continue
 			}
 			if msgID == "" {
-				log.Printf("    ⚠️  Telegram sent complaint %s but returned no message ID", n.ComplaintID)
+				slog.Warn("Telegram sent complaint but returned no message ID", "complaint", n.ComplaintID)
 				continue
 			}
 			if err := f.storage.SetMessageID(n.ComplaintID, msgID); err != nil {
-				log.Printf("    ⚠️  Failed to persist Telegram message ID for %s: %v", n.ComplaintID, err)
+				slog.Warn("failed to persist Telegram message ID", "complaint", n.ComplaintID, "error", err)
 			}
 		}
 	}
@@ -303,7 +307,7 @@ func (f *Fetcher) processComplaintsConcurrently(complaints []Link) error {
 			}
 
 			if err := f.wa.SendComplaintMessage(n.WAText, n.ComplaintID, f.storage); err != nil {
-				log.Printf("    ⚠️  Failed to send WhatsApp msg for %s: %v", n.ComplaintID, err)
+				slog.Warn("failed to send WhatsApp complaint message", "complaint", n.ComplaintID, "error", err)
 			}
 		}
 	}
@@ -403,3 +407,4 @@ func getNextPageURL(doc *goquery.Document) string {
 	})
 	return nextURL
 }
+

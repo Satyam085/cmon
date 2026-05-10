@@ -79,7 +79,12 @@ type PendingResolution struct {
 
 // New creates a new Storage instance, connects to SQLite, and loads into memory.
 // It also handles the one-time migration from complaints.csv if it exists.
-func New() *Storage {
+//
+// Boot-path failures (open DB, configure pragmas, create tables, load existing
+// rows) crash via log.Fatalf because they leave the process in an unrecoverable
+// state. Recoverable schema-evolution failures (column-ensure) are returned as
+// an error so the caller can decide.
+func New() (*Storage, error) {
 	s := &Storage{
 		seen:                 make(map[string]bool),
 		messageIDs:           make(map[string]string),
@@ -145,13 +150,19 @@ func New() *Storage {
 		log.Fatalf("❌ Failed to create tables: %v", err)
 	}
 
-	s.ensureComplaintColumn("village", "TEXT")
-	s.ensureComplaintColumn("belt", "TEXT")
-	s.ensureComplaintColumn("mobile_no", "TEXT")
-	s.ensureComplaintColumn("address", "TEXT")
-	s.ensureComplaintColumn("area", "TEXT")
-	s.ensureComplaintColumn("description", "TEXT")
-	s.ensureComplaintColumn("complain_date", "TEXT")
+	for _, col := range []struct{ name, typ string }{
+		{"village", "TEXT"},
+		{"belt", "TEXT"},
+		{"mobile_no", "TEXT"},
+		{"address", "TEXT"},
+		{"area", "TEXT"},
+		{"description", "TEXT"},
+		{"complain_date", "TEXT"},
+	} {
+		if err := s.ensureComplaintColumn(col.name, col.typ); err != nil {
+			return nil, err
+		}
+	}
 
 	// Run migration from old complaints.csv if needed
 	s.migrateFromCSV()
@@ -159,7 +170,7 @@ func New() *Storage {
 	// Load data from DB into memory maps
 	s.loadFromDB()
 
-	return s
+	return s, nil
 }
 
 // migrateFromCSV parses the legacy complaints.csv file, inserts all records
@@ -559,6 +570,32 @@ func (s *Storage) GetPendingCountsByBelt() map[string]int {
 	return counts
 }
 
+// GetVillageCountsByBelt returns village -> open complaint count for the
+// given belt. The belt argument is matched case-insensitively against the
+// raw canonical belt key stored on each complaint; callers that hold a
+// display name should canonicalise first via belt.Canonicalize.
+//
+// Empty / whitespace village names are bucketed under "Unknown" so the
+// drill-down view never shows an unlabelled row.
+func (s *Storage) GetVillageCountsByBelt(canonicalBelt string) map[string]int {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	target := strings.ToLower(strings.TrimSpace(canonicalBelt))
+	counts := make(map[string]int)
+	for complaintID := range s.seen {
+		if strings.ToLower(strings.TrimSpace(s.belts[complaintID])) != target {
+			continue
+		}
+		village := strings.TrimSpace(s.villages[complaintID])
+		if village == "" {
+			village = "Unknown"
+		}
+		counts[village]++
+	}
+	return counts
+}
+
 // GetPendingComplaints returns complaint IDs grouped by belt.
 func (s *Storage) GetPendingComplaints() map[string][]string {
 	s.mu.RLock()
@@ -852,12 +889,13 @@ func (s *Storage) getStorageStats() (int, error) {
 	return count, err
 }
 
-func (s *Storage) ensureComplaintColumn(name, typ string) {
+func (s *Storage) ensureComplaintColumn(name, typ string) error {
 	if _, err := s.db.Exec(fmt.Sprintf(`ALTER TABLE complaints ADD COLUMN %s %s`, name, typ)); err != nil {
 		// Ignore "duplicate column" style errors across SQLite variants.
 		if err.Error() != "SQL logic error: duplicate column name: "+name+" (1)" &&
 			err.Error() != "duplicate column name: "+name {
-			log.Fatalf("❌ Failed to ensure complaints.%s column: %v", name, err)
+			return fmt.Errorf("ensure complaints.%s column: %w", name, err)
 		}
 	}
+	return nil
 }

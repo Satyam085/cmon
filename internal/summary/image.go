@@ -35,6 +35,58 @@ type Complaint struct {
 	// APIID is the internal backend ID used for API calls (e.g. resolve).
 	// Included in the JSON payload for the dashboard resolve feature.
 	APIID string `json:"api_id"`
+
+	// AgeMinutes is now() − ComplainDate at the moment the complaint was
+	// fetched. Zero when ComplainDate is empty or unparseable. Surfaces as a
+	// human-readable "3d 4h" cell in the dashboard + summary image so the ops
+	// team can triage by how long a ticket has been pending.
+	AgeMinutes int64 `json:"age_minutes"`
+}
+
+// AgeString renders an AgeMinutes value as a compact human-readable string
+// like "3d 4h", "5h", or "12m". Returns "" for non-positive ages so the
+// dashboard / summary image can leave the cell blank rather than print "0m".
+func (c *Complaint) AgeString() string {
+	return formatAge(c.AgeMinutes)
+}
+
+// formatAge converts a duration in minutes into the compact form used by the
+// dashboard and summary image. Top unit is days; we never print weeks because
+// the operational SLA is hours-to-days.
+func formatAge(minutes int64) string {
+	if minutes <= 0 {
+		return ""
+	}
+	d := minutes / (60 * 24)
+	h := (minutes % (60 * 24)) / 60
+	m := minutes % 60
+	switch {
+	case d > 0 && h > 0:
+		return fmt.Sprintf("%dd %dh", d, h)
+	case d > 0:
+		return fmt.Sprintf("%dd", d)
+	case h > 0 && m > 0:
+		return fmt.Sprintf("%dh %dm", h, m)
+	case h > 0:
+		return fmt.Sprintf("%dh", h)
+	default:
+		return fmt.Sprintf("%dm", m)
+	}
+}
+
+// computeAgeMinutes returns the age in minutes for a complaint date string.
+// Returns 0 when the date is empty or unparseable so callers can store the
+// raw zero value without special-casing.
+func computeAgeMinutes(complainDate string, now time.Time) int64 {
+	t, ok := parseComplaintDate(complainDate)
+	if !ok {
+		return 0
+	}
+	delta := now.Sub(t)
+	if delta < 0 {
+		return 0
+	}
+	return int64(delta / time.Minute)
 }
 
 // BeltImage is one rendered summary image for a single belt, returned by
@@ -47,21 +99,29 @@ type BeltImage struct {
 	Complaints []Complaint
 }
 
-// Table styling constants — rendered at 2x scale for Telegram clarity
+// renderScale is a global oversampling factor. Telegram converts photos to
+// JPEG and resizes for in-chat display; rendering at a higher resolution
+// gives the compressor more detail to work with, so post-compression text
+// stays sharp instead of blurring. Bump to 3 if 2 still isn't enough.
+const renderScale = 2
+
+// Table styling constants. All values are post-scale (i.e. fontSize 52 means
+// 26pt logical, doubled). Derive from renderScale so the relationship is
+// visible at a glance and a single edit retunes everything.
 const (
-	cellPaddingX  = 20
-	cellPaddingY  = 16
-	minRowHeight  = 76
-	headerHeight  = 88
-	groupHeaderH  = 64
-	fontSize      = 26
-	headerFontSz  = 26
-	titleFontSz   = 40
-	titlePadding  = 110
-	footerPadding = 80
-	minColWidth   = 110
-	maxAddrWidth  = 360.0
-	maxDescWidth  = 440.0
+	cellPaddingX  = 20 * renderScale
+	cellPaddingY  = 16 * renderScale
+	minRowHeight  = 76 * renderScale
+	headerHeight  = 88 * renderScale
+	groupHeaderH  = 64 * renderScale
+	fontSize      = 26 * renderScale
+	headerFontSz  = 26 * renderScale
+	titleFontSz   = 40 * renderScale
+	titlePadding  = 110 * renderScale
+	footerPadding = 80 * renderScale
+	minColWidth   = 110 * renderScale
+	maxAddrWidth  = 360.0 * renderScale
+	maxDescWidth  = 440.0 * renderScale
 )
 
 // Light theme colors
@@ -99,6 +159,7 @@ var columns = []column{
 	{"Area", func(c *Complaint) string { return c.Area }, 0},
 	{"Description", func(c *Complaint) string { return c.Description }, maxDescWidth},
 	{"Date", func(c *Complaint) string { return c.ComplainDate }, 0},
+	{"Age", func(c *Complaint) string { return c.AgeString() }, 0},
 }
 
 // findFont locates a font file across Linux and Windows paths.
@@ -189,7 +250,7 @@ func wrapText(dc *gg.Context, text string, maxWidth float64) []string {
 // computeRowHeights calculates the height of each row based on wrapped text.
 func computeRowHeights(dc *gg.Context, complaints []Complaint, colWidths []float64) []float64 {
 	_, lineH := dc.MeasureString("Ay")
-	lineSpacing := lineH + 4
+	lineSpacing := lineH + float64(4*renderScale)
 
 	heights := make([]float64, len(complaints))
 	for rowIdx, c := range complaints {
@@ -240,7 +301,7 @@ func RenderTable(complaints []Complaint) ([]byte, error) {
 	colWidths := make([]float64, len(columns))
 	for i, col := range columns {
 		w, _ := tmpDC.MeasureString(col.header)
-		colWidths[i] = w + cellPaddingX*2 + 4
+		colWidths[i] = w + cellPaddingX*2 + 4*renderScale
 		if colWidths[i] < float64(minColWidth) {
 			colWidths[i] = float64(minColWidth)
 		}
@@ -255,7 +316,7 @@ func RenderTable(complaints []Complaint) ([]byte, error) {
 			c := c
 			for i, col := range columns {
 				w, _ := tmpDC.MeasureString(col.field(&c))
-				needed := w + cellPaddingX*2 + 4
+				needed := w + cellPaddingX*2 + 4*renderScale
 				if needed > colWidths[i] {
 					colWidths[i] = needed
 				}
@@ -287,7 +348,7 @@ func RenderTable(complaints []Complaint) ([]byte, error) {
 		totalWidth += w
 	}
 
-	canvasWidth := totalWidth + 80 // 40px margin each side
+	canvasWidth := totalWidth + float64(40*renderScale*2) // 40px logical margin each side
 	canvasHeight := float64(titlePadding) +
 		float64(headerHeight) +
 		totalRowHeight +
@@ -304,14 +365,14 @@ func RenderTable(complaints []Complaint) ([]byte, error) {
 	dc.LoadFontFace(boldFont, titleFontSz)
 	dc.SetColor(titleColor)
 	title := fmt.Sprintf("Pending Complaints Summary Valod SDn  —  %s", time.Now().Format("02 Jan 2006, 03:04 PM"))
-	dc.DrawStringAnchored(title, canvasWidth/2, float64(titlePadding)/2+2, 0.5, 0.5)
+	dc.DrawStringAnchored(title, canvasWidth/2, float64(titlePadding)/2+float64(2*renderScale), 0.5, 0.5)
 
-	tableX := 40.0
+	tableX := float64(40 * renderScale)
 	tableY := float64(titlePadding)
 
 	// Header row background (rounded top corners)
 	dc.SetColor(headerBgColor)
-	dc.DrawRoundedRectangle(tableX, tableY, totalWidth, float64(headerHeight), 16)
+	dc.DrawRoundedRectangle(tableX, tableY, totalWidth, float64(headerHeight), float64(16*renderScale))
 	dc.Fill()
 
 	// Header text
@@ -328,7 +389,7 @@ func RenderTable(complaints []Complaint) ([]byte, error) {
 	// Data rows
 	dc.LoadFontFace(regularFont, fontSize)
 	_, lineH := dc.MeasureString("Ay")
-	lineSpacing := lineH + 4
+	lineSpacing := lineH + float64(4*renderScale)
 	curY := tableY + float64(headerHeight)
 
 	rowIdx := 0
@@ -349,7 +410,7 @@ func RenderTable(complaints []Complaint) ([]byte, error) {
 			dc.Fill()
 
 			dc.SetColor(borderColor)
-			dc.SetLineWidth(0.5)
+			dc.SetLineWidth(0.5 * renderScale)
 			dc.DrawLine(tableX, curY+rh, tableX+totalWidth, curY+rh)
 			dc.Stroke()
 
@@ -378,13 +439,13 @@ func RenderTable(complaints []Complaint) ([]byte, error) {
 
 	// Outer table border
 	dc.SetColor(borderColor)
-	dc.SetLineWidth(1)
+	dc.SetLineWidth(1 * renderScale)
 	totalTableH := float64(headerHeight) + totalRowHeight
-	dc.DrawRoundedRectangle(tableX, tableY, totalWidth, totalTableH, 16)
+	dc.DrawRoundedRectangle(tableX, tableY, totalWidth, totalTableH, float64(16*renderScale))
 	dc.Stroke()
 
 	// Vertical column borders
-	dc.SetLineWidth(0.5)
+	dc.SetLineWidth(0.5 * renderScale)
 	x = tableX
 	for i := 0; i < len(columns)-1; i++ {
 		x += colWidths[i]
@@ -393,10 +454,10 @@ func RenderTable(complaints []Complaint) ([]byte, error) {
 	}
 
 	// Footer
-	dc.LoadFontFace(regularFont, 24)
+	dc.LoadFontFace(regularFont, 24*renderScale)
 	dc.SetColor(footerColor)
 	footer := fmt.Sprintf("Total: %d pending complaints", len(complaints))
-	dc.DrawStringAnchored(footer, canvasWidth/2, canvasHeight-30, 0.5, 0.5)
+	dc.DrawStringAnchored(footer, canvasWidth/2, canvasHeight-float64(30*renderScale), 0.5, 0.5)
 
 	// ---- Step 4: Encode to PNG ----
 	return encodeImage(dc.Image())
@@ -455,7 +516,7 @@ func RenderBeltTable(beltLabel string, complaints []Complaint) ([]byte, error) {
 	colWidths := make([]float64, len(columns))
 	for i, col := range columns {
 		w, _ := tmpDC.MeasureString(col.header)
-		colWidths[i] = w + cellPaddingX*2 + 4
+		colWidths[i] = w + cellPaddingX*2 + 4*renderScale
 		if colWidths[i] < float64(minColWidth) {
 			colWidths[i] = float64(minColWidth)
 		}
@@ -468,7 +529,7 @@ func RenderBeltTable(beltLabel string, complaints []Complaint) ([]byte, error) {
 		c := c
 		for i, col := range columns {
 			w, _ := tmpDC.MeasureString(col.field(&c))
-			needed := w + cellPaddingX*2 + 4
+			needed := w + cellPaddingX*2 + 4*renderScale
 			if needed > colWidths[i] {
 				colWidths[i] = needed
 			}
@@ -492,7 +553,7 @@ func RenderBeltTable(beltLabel string, complaints []Complaint) ([]byte, error) {
 		totalWidth += w
 	}
 
-	canvasWidth := totalWidth + 80
+	canvasWidth := totalWidth + float64(40*renderScale*2)
 	canvasHeight := float64(titlePadding) +
 		float64(headerHeight) +
 		totalRowHeight +
@@ -507,13 +568,13 @@ func RenderBeltTable(beltLabel string, complaints []Complaint) ([]byte, error) {
 	dc.SetColor(titleColor)
 	title := fmt.Sprintf("Pending Complaints — %s Belt — %s",
 		beltLabel, time.Now().Format("02 Jan 2006, 03:04 PM"))
-	dc.DrawStringAnchored(title, canvasWidth/2, float64(titlePadding)/2+2, 0.5, 0.5)
+	dc.DrawStringAnchored(title, canvasWidth/2, float64(titlePadding)/2+float64(2*renderScale), 0.5, 0.5)
 
-	tableX := 40.0
+	tableX := float64(40 * renderScale)
 	tableY := float64(titlePadding)
 
 	dc.SetColor(headerBgColor)
-	dc.DrawRoundedRectangle(tableX, tableY, totalWidth, float64(headerHeight), 16)
+	dc.DrawRoundedRectangle(tableX, tableY, totalWidth, float64(headerHeight), float64(16*renderScale))
 	dc.Fill()
 
 	dc.LoadFontFace(boldFont, headerFontSz)
@@ -528,7 +589,7 @@ func RenderBeltTable(beltLabel string, complaints []Complaint) ([]byte, error) {
 
 	dc.LoadFontFace(regularFont, fontSize)
 	_, lineH := dc.MeasureString("Ay")
-	lineSpacing := lineH + 4
+	lineSpacing := lineH + float64(4*renderScale)
 	curY := tableY + float64(headerHeight)
 
 	for rowIdx, c := range complaints {
@@ -544,7 +605,7 @@ func RenderBeltTable(beltLabel string, complaints []Complaint) ([]byte, error) {
 		dc.Fill()
 
 		dc.SetColor(borderColor)
-		dc.SetLineWidth(0.5)
+		dc.SetLineWidth(0.5 * renderScale)
 		dc.DrawLine(tableX, curY+rh, tableX+totalWidth, curY+rh)
 		dc.Stroke()
 
@@ -570,12 +631,12 @@ func RenderBeltTable(beltLabel string, complaints []Complaint) ([]byte, error) {
 	}
 
 	dc.SetColor(borderColor)
-	dc.SetLineWidth(1)
+	dc.SetLineWidth(1 * renderScale)
 	totalTableH := float64(headerHeight) + totalRowHeight
-	dc.DrawRoundedRectangle(tableX, tableY, totalWidth, totalTableH, 16)
+	dc.DrawRoundedRectangle(tableX, tableY, totalWidth, totalTableH, float64(16*renderScale))
 	dc.Stroke()
 
-	dc.SetLineWidth(0.5)
+	dc.SetLineWidth(0.5 * renderScale)
 	x = tableX
 	for i := 0; i < len(columns)-1; i++ {
 		x += colWidths[i]
@@ -583,10 +644,10 @@ func RenderBeltTable(beltLabel string, complaints []Complaint) ([]byte, error) {
 		dc.Stroke()
 	}
 
-	dc.LoadFontFace(regularFont, 24)
+	dc.LoadFontFace(regularFont, 24*renderScale)
 	dc.SetColor(footerColor)
 	footer := fmt.Sprintf("%s Belt — %d pending complaints", beltLabel, len(complaints))
-	dc.DrawStringAnchored(footer, canvasWidth/2, canvasHeight-30, 0.5, 0.5)
+	dc.DrawStringAnchored(footer, canvasWidth/2, canvasHeight-float64(30*renderScale), 0.5, 0.5)
 
 	return encodeImage(dc.Image())
 }
@@ -686,19 +747,19 @@ func drawGroupHeader(dc *gg.Context, boldFont string, x, y, width float64, beltN
 	dc.Fill()
 
 	dc.SetColor(borderColor)
-	dc.SetLineWidth(0.5)
+	dc.SetLineWidth(0.5 * renderScale)
 	dc.DrawLine(x, y+float64(groupHeaderH), x+width, y+float64(groupHeaderH))
 	dc.Stroke()
 
-	dc.LoadFontFace(boldFont, headerFontSz-2)
-	circleX := x + cellPaddingX + 10
+	dc.LoadFontFace(boldFont, headerFontSz-2*renderScale)
+	circleX := x + cellPaddingX + float64(10*renderScale)
 	circleY := y + float64(groupHeaderH)/2
 
 	dc.SetColor(style.Text)
-	dc.DrawCircle(circleX, circleY, 8)
+	dc.DrawCircle(circleX, circleY, float64(8*renderScale))
 	dc.Fill()
 
 	dc.SetColor(style.Text)
 	label := fmt.Sprintf("%s Belt  •  %d complaints", style.Label, count)
-	dc.DrawString(label, circleX+20, y+float64(groupHeaderH)/2+10)
+	dc.DrawString(label, circleX+float64(20*renderScale), y+float64(groupHeaderH)/2+float64(10*renderScale))
 }

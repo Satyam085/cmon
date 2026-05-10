@@ -1,19 +1,12 @@
+// This file owns the dashboard page template + the shared payload types.
+// Route registration lives in dashboard_routes.go, JSON shaping in
+// dashboard_payload.go, and CSV/JSON export flattening in dashboard_export.go.
+
 package health
 
 import (
-	"encoding/json"
-	"fmt"
 	"html/template"
-	"image/color"
-	"log"
-	"net/http"
-	"strings"
-	"time"
 
-	"cmon/internal/api"
-	"cmon/internal/belt"
-	"cmon/internal/session"
-	"cmon/internal/storage"
 	"cmon/internal/summary"
 )
 
@@ -461,6 +454,91 @@ var complaintsPageTemplate = template.Must(template.New("complaints-page").Parse
       color: var(--text);
     }
 
+    /* ── Date range filter ── */
+    .date-filter {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      padding: 4px 10px;
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      font-size: 12.5px;
+      color: var(--text-muted);
+    }
+    .date-filter input[type="date"] {
+      border: none;
+      background: transparent;
+      padding: 2px 4px;
+      font-size: 12.5px;
+      color: var(--text);
+      font-family: inherit;
+    }
+    .date-filter input[type="date"]:focus {
+      outline: none;
+      background: var(--accent-soft);
+      border-radius: 4px;
+    }
+    .date-filter-label {
+      font-size: 11px;
+      font-weight: 600;
+      letter-spacing: 0.04em;
+      text-transform: uppercase;
+      color: var(--text-faint);
+    }
+    .date-filter-sep { color: var(--text-faint); }
+    .date-filter.active {
+      border-color: var(--accent);
+      background: var(--accent-soft);
+    }
+    .date-filter-clear {
+      border: none;
+      background: transparent;
+      color: var(--text-muted);
+      cursor: pointer;
+      font-size: 16px;
+      line-height: 1;
+      padding: 0 4px;
+      border-radius: 4px;
+    }
+    .date-filter-clear:hover { color: var(--text); background: var(--surface-bright); }
+
+    /* ── Belt filter pills ── */
+    .belt-tabs {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+      margin-bottom: 14px;
+    }
+    .belt-tab {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      padding: 6px 12px;
+      font-size: 13px;
+      font-weight: 500;
+      color: var(--text-muted);
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 999px;
+      cursor: pointer;
+      transition: background 0.12s, border-color 0.12s, color 0.12s;
+    }
+    .belt-tab:hover {
+      background: var(--surface-bright);
+      color: var(--text);
+    }
+    .belt-tab.active {
+      background: var(--accent);
+      border-color: var(--accent);
+      color: #fff;
+    }
+    .belt-tab .belt-tab-count {
+      font-family: var(--font-mono);
+      font-size: 12px;
+      opacity: 0.85;
+    }
+
     /* ── Groups ── */
     .groups { display: flex; flex-direction: column; gap: 14px; }
     .group {
@@ -518,6 +596,66 @@ var complaintsPageTemplate = template.Must(template.New("complaints-page").Parse
     .group.collapsed .group-chevron { transform: rotate(-90deg); }
     .group-body { border-top: 1px solid var(--border); }
     .group.collapsed .group-body { display: none; }
+
+    /* ── Villages drill-down ── */
+    .villages-btn {
+      display: inline-flex;
+      align-items: center;
+      gap: 4px;
+      padding: 3px 8px;
+      font-size: 11.5px;
+      font-weight: 500;
+      color: var(--text-muted);
+      background: transparent;
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      cursor: pointer;
+      transition: background 0.12s, border-color 0.12s, color 0.12s;
+    }
+    .villages-btn svg { width: 12px; height: 12px; }
+    .villages-btn:hover {
+      background: var(--surface-bright);
+      color: var(--text);
+      border-color: var(--accent);
+    }
+    .villages-popover {
+      position: absolute;
+      z-index: 10;
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: var(--r-md);
+      box-shadow: var(--shadow-lg);
+      padding: 10px 12px;
+      min-width: 200px;
+      max-height: 320px;
+      overflow-y: auto;
+      font-size: 13px;
+    }
+    .villages-popover-title {
+      font-size: 11px;
+      font-weight: 600;
+      color: var(--text-muted);
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+      margin-bottom: 6px;
+    }
+    .villages-popover-row {
+      display: flex;
+      justify-content: space-between;
+      gap: 12px;
+      padding: 4px 0;
+    }
+    .villages-popover-row .v-name { color: var(--text); }
+    .villages-popover-row .v-count {
+      font-family: var(--font-mono);
+      color: var(--text-muted);
+      font-weight: 600;
+    }
+    .villages-popover-empty {
+      color: var(--text-faint);
+      font-style: italic;
+      padding: 6px 0;
+    }
 
     /* ── Table ── */
     .tbl-wrap { overflow-x: auto; }
@@ -922,14 +1060,26 @@ var complaintsPageTemplate = template.Must(template.New("complaints-page").Parse
       /* Groups */
       .groups { display: block; }
       .group {
-        break-inside: avoid;
-        page-break-inside: avoid;
         margin-bottom: 14pt;
         border: none !important;
         border-radius: 0 !important;
         overflow: visible !important;
         box-shadow: none !important;
         background: transparent !important;
+        /* Each belt starts on its own page so the printed report can be
+           handed out belt-by-belt. break-inside: avoid keeps a single belt
+           together when its rows fit on one page; tall belts will still
+           split across pages naturally. */
+        break-before: page;
+        page-break-before: always;
+        break-inside: auto;
+        page-break-inside: auto;
+      }
+      /* Don't force a page break before the very first group — that would
+         leave the print header alone on page 1. */
+      .group:first-of-type {
+        break-before: auto;
+        page-break-before: auto;
       }
       .group:last-child { margin-bottom: 0; }
       .group-header {
@@ -1045,6 +1195,7 @@ var complaintsPageTemplate = template.Must(template.New("complaints-page").Parse
         <span><span class="print-meta-label">Printed</span><strong id="printDate">—</strong></span>
         <span><span class="print-meta-label">Pending</span><strong id="printTotal">—</strong></span>
         <span><span class="print-meta-label">Belts</span><strong id="printGroups">—</strong></span>
+        <span id="printFiltersWrap" hidden><span class="print-meta-label">Filters</span><strong id="printFilters">—</strong></span>
       </div>
     </header>
 
@@ -1083,6 +1234,9 @@ var complaintsPageTemplate = template.Must(template.New("complaints-page").Parse
       <div class="dist-legend" id="distLegend"></div>
     </section>
 
+    <!-- Belt filter pills -->
+    <nav class="belt-tabs" id="beltTabs" role="tablist" aria-label="Filter by belt"></nav>
+
     <!-- Toolbar -->
     <section class="toolbar">
       <div class="search-box">
@@ -1091,6 +1245,14 @@ var complaintsPageTemplate = template.Must(template.New("complaints-page").Parse
         <span class="search-kbd" id="searchKbd">/</span>
       </div>
       <span class="search-count" id="searchCount"></span>
+
+      <div class="date-filter" title="Filter complaints by complain date (inclusive)">
+        <span class="date-filter-label">Date</span>
+        <input id="fromDate" type="date" aria-label="From date">
+        <span class="date-filter-sep">→</span>
+        <input id="toDate" type="date" aria-label="To date">
+        <button id="dateClearBtn" class="date-filter-clear" type="button" title="Clear date filter" hidden>&times;</button>
+      </div>
 
       <button id="debugToggle" class="tool-btn" type="button" title="Toggle debug columns (Telegram/WhatsApp IDs)">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 20h9"/><path d="M16.5 3.5a2.12 2.12 0 013 3L7 19l-4 1 1-4z"/></svg>
@@ -1225,15 +1387,82 @@ var complaintsPageTemplate = template.Must(template.New("complaints-page").Parse
       const distBarWrap = $("distBarWrap");
       const distBar = $("distBar");
       const distLegend = $("distLegend");
+      const beltTabsEl = $("beltTabs");
+      const fromDateEl = $("fromDate");
+      const toDateEl = $("toDate");
+      const dateClearBtn = $("dateClearBtn");
+      const dateFilterEl = document.querySelector(".date-filter");
 
       let payload = null;
       let isLoading = false;
       let lastLoadTime = null;
       let agoTimer = null;
+
+      // activeBelt is "" for "all belts" or a canonical belt key (the same key
+      // the server uses in groups[].belt). Initialised from the ?belt= query
+      // string so a deep-link or refresh preserves the filter.
+      let activeBelt = (new URLSearchParams(location.search).get("belt") || "").trim();
+
+      // Date range filter (inclusive). Strings in YYYY-MM-DD form because that
+      // is what <input type="date"> emits and consumes. "" means unset on
+      // either side. Initialised from ?from= / ?to= URL params for deep-links.
+      let activeFromDate = (new URLSearchParams(location.search).get("from") || "").trim();
+      let activeToDate = (new URLSearchParams(location.search).get("to") || "").trim();
       let collapsedBelts = new Set();
 
       // Utils
       const esc = (v) => String(v ?? "").replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;").replace(/"/g,"&quot;").replace(/'/g,"&#39;");
+
+      // parseComplainDate mirrors the Go parseComplaintDate in summary/image.go.
+      // Accepts the DGVCL date formats and returns a YYYY-MM-DD string suitable
+      // for direct comparison against <input type="date"> values, or "" if
+      // unparseable. Date-only comparison is what the date-range filter wants;
+      // we don't need the time component.
+      function parseComplainDateYMD(raw) {
+        if (!raw) return "";
+        const s = String(raw).trim();
+        if (!s) return "";
+        // ISO: 2026-03-04 [time]
+        let m = s.match(/^(\d{4})-(\d{2})-(\d{2})/);
+        if (m) return m[1] + "-" + m[2] + "-" + m[3];
+        // DD-MM-YYYY [time]
+        m = s.match(/^(\d{2})-(\d{2})-(\d{4})/);
+        if (m) return m[3] + "-" + m[2] + "-" + m[1];
+        // DD/MM/YYYY [time]
+        m = s.match(/^(\d{2})\/(\d{2})\/(\d{4})/);
+        if (m) return m[3] + "-" + m[2] + "-" + m[1];
+        return "";
+      }
+
+      // dateInRange returns true when a complaint's complain_date sits within
+      // [from, to] inclusive. Empty bounds are treated as open-ended. A
+      // complaint with an unparseable date is kept when no filter is active
+      // and dropped as soon as either bound is set — otherwise the filter
+      // would silently let bad rows through.
+      function dateInRange(complainDate, from, to) {
+        if (!from && !to) return true;
+        const ymd = parseComplainDateYMD(complainDate);
+        if (!ymd) return false;
+        if (from && ymd < from) return false;
+        if (to && ymd > to) return false;
+        return true;
+      }
+
+      // formatAge mirrors the Go formatAge in summary/image.go: compact "3d 4h",
+      // "5h 12m", "23m" form. Returns "" for non-positive minutes so the cell
+      // stays blank rather than showing "0m".
+      function formatAge(minutes) {
+        const m = Number(minutes);
+        if (!Number.isFinite(m) || m <= 0) return "";
+        const d = Math.floor(m / (60 * 24));
+        const h = Math.floor((m % (60 * 24)) / 60);
+        const mins = m % 60;
+        if (d > 0 && h > 0) return d + "d " + h + "h";
+        if (d > 0) return d + "d";
+        if (h > 0 && mins > 0) return h + "h " + mins + "m";
+        if (h > 0) return h + "h";
+        return mins + "m";
+      }
 
       function timeAgo(date) {
         const sec = Math.floor((Date.now() - date.getTime()) / 1000);
@@ -1316,6 +1545,7 @@ var complaintsPageTemplate = template.Must(template.New("complaints-page").Parse
           '<td data-label="Area">' + esc(c.area || "—") + '</td>' +
           '<td data-label="Description" class="desc-cell">' + esc(c.description || "—") + '</td>' +
           '<td data-label="Date" class="mono">' + esc(c.complain_date || "—") + '</td>' +
+          '<td data-label="Age" class="mono">' + esc(formatAge(c.age_minutes)) + '</td>' +
           '<td data-label="Telegram" class="debug-col mono">' + esc(tg) + '</td>' +
           '<td data-label="WhatsApp" class="debug-col mono">' + esc(wa) + '</td>' +
           '<td data-label="Action" class="action-col">' + resolveBtn + '</td>' +
@@ -1333,6 +1563,10 @@ var complaintsPageTemplate = template.Must(template.New("complaints-page").Parse
               '<span class="group-indicator" style="background:' + g.text_color + ';--glow-color:' + g.text_color + '"></span>' +
               '<span class="group-name">' + esc(g.label) + ' Belt</span>' +
               '<span class="group-badge" style="background:' + g.fill_color + ';color:' + g.text_color + '">' + complaints.length + '</span>' +
+              '<button class="villages-btn" type="button" data-belt-key="' + esc(key) + '" title="Show village breakdown">' +
+                '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 21h18"/><path d="M5 21V8l7-5 7 5v13"/><path d="M9 21v-6h6v6"/></svg>' +
+                'Villages' +
+              '</button>' +
             '</div>' +
             '<svg class="group-chevron" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="6 9 12 15 18 9"/></svg>' +
           '</div>' +
@@ -1352,7 +1586,7 @@ var complaintsPageTemplate = template.Must(template.New("complaints-page").Parse
             '</colgroup>' +
             '<thead><tr>' +
               '<th class="complaint-col">Complaint</th><th>Name</th><th>Consumer</th><th>Mobile</th>' +
-              '<th>Address</th><th>Area</th><th>Description</th><th>Date</th>' +
+              '<th>Address</th><th>Area</th><th>Description</th><th>Date</th><th>Age</th>' +
               '<th class="debug-col">Telegram</th><th class="debug-col">WhatsApp</th>' +
               '<th class="action-col">Action</th>' +
             '</tr></thead>' +
@@ -1362,27 +1596,103 @@ var complaintsPageTemplate = template.Must(template.New("complaints-page").Parse
       }
 
       // Main render
+      // renderBeltTabs paints the pill row above the groups. Belts are pulled
+      // from the unfiltered payload so the row stays stable as the user types
+      // in the search box. activeBelt keys off the same g.belt field that
+      // the group cards use, so canonicalisation is the server's job.
+      function renderBeltTabs(groups) {
+        if (!groups || groups.length === 0) { beltTabsEl.innerHTML = ""; return; }
+        const total = groups.reduce((s, g) => s + g.complaints.length, 0);
+
+        // "All belts" pill first, then one per belt in payload order.
+        const pills = [
+          '<button type="button" class="belt-tab' + (activeBelt === "" ? " active" : "") +
+            '" data-belt-key="" role="tab" aria-selected="' + (activeBelt === "" ? "true" : "false") + '">' +
+            'All <span class="belt-tab-count">' + total + '</span>' +
+          '</button>',
+        ].concat(groups.map((g) => {
+          const isActive = activeBelt === g.belt;
+          return '<button type="button" class="belt-tab' + (isActive ? " active" : "") +
+            '" data-belt-key="' + esc(g.belt) + '" role="tab" aria-selected="' + (isActive ? "true" : "false") + '">' +
+            esc(g.label) + ' <span class="belt-tab-count">' + g.complaints.length + '</span>' +
+          '</button>';
+        })).join("");
+
+        beltTabsEl.innerHTML = pills;
+        beltTabsEl.querySelectorAll(".belt-tab").forEach((btn) => {
+          btn.addEventListener("click", () => {
+            const key = btn.dataset.beltKey || "";
+            if (key === activeBelt) return;
+            activeBelt = key;
+            // Sync the URL so refresh / share preserves the filter without
+            // adding a navigation entry per click.
+            const u = new URL(location.href);
+            if (activeBelt) u.searchParams.set("belt", activeBelt);
+            else u.searchParams.delete("belt");
+            history.replaceState(null, "", u.toString());
+            render();
+          });
+        });
+      }
+
       function render() {
         if (!payload) { contentEl.innerHTML = ""; return; }
 
+        // Drop the active-belt filter silently if a refresh removed that belt
+        // (e.g. last complaint resolved). Keeps the UI from getting stuck on
+        // an empty tab.
+        if (activeBelt && !payload.groups.some((g) => g.belt === activeBelt)) {
+          activeBelt = "";
+          const u = new URL(location.href);
+          u.searchParams.delete("belt");
+          history.replaceState(null, "", u.toString());
+        }
+
         const q = searchInput.value.trim().toLowerCase();
         const filtered = payload.groups
-          .map((g) => ({ ...g, complaints: g.complaints.filter((c) => matches(c, q)) }))
+          .filter((g) => activeBelt === "" || g.belt === activeBelt)
+          .map((g) => ({
+            ...g,
+            complaints: g.complaints.filter((c) =>
+              matches(c, q) && dateInRange(c.complain_date, activeFromDate, activeToDate)
+            ),
+          }))
           .filter((g) => g.complaints.length > 0);
 
         const visCount = filtered.reduce((s, g) => s + g.complaints.length, 0);
+        const anyFilter = !!(q || activeBelt || activeFromDate || activeToDate);
 
         // Stats
-        setMetric("totalCount", q ? visCount : payload.total_count);
-        $("totalSub").textContent = q ? "of " + payload.total_count + " total" : "complaints";
-        setMetric("groupCount", q ? filtered.length : payload.group_count);
-        $("groupSub").textContent = q ? "of " + payload.group_count + " total" : "active belts";
+        setMetric("totalCount", anyFilter ? visCount : payload.total_count);
+        $("totalSub").textContent = anyFilter ? "of " + payload.total_count + " total" : "complaints";
+        setMetric("groupCount", anyFilter ? filtered.length : payload.group_count);
+        $("groupSub").textContent = anyFilter ? "of " + payload.group_count + " total" : "active belts";
 
-        // Print header sync
-        setMetric("printTotal", payload.total_count);
-        setMetric("printGroups", payload.group_count);
+        // Print header sync — reflect what's actually on screen so the printed
+        // report's totals match its rows. Also render an active-filter summary
+        // so the printed page documents the filter that produced it.
+        setMetric("printTotal", anyFilter ? visCount : payload.total_count);
+        setMetric("printGroups", anyFilter ? filtered.length : payload.group_count);
+        const filterParts = [];
+        if (activeBelt) filterParts.push("Belt: " + activeBelt);
+        if (activeFromDate || activeToDate) {
+          filterParts.push("Date: " + (activeFromDate || "—") + " → " + (activeToDate || "—"));
+        }
+        if (q) filterParts.push("Search: " + q);
+        const printFilters = $("printFilters");
+        const printFiltersWrap = $("printFiltersWrap");
+        if (filterParts.length === 0) {
+          if (printFiltersWrap) printFiltersWrap.hidden = true;
+          if (printFilters) printFilters.textContent = "—";
+        } else {
+          if (printFilters) printFilters.textContent = filterParts.join(" · ");
+          if (printFiltersWrap) printFiltersWrap.hidden = false;
+        }
 
-        // Search count
+        // Update the search-count chip to reflect any-filter visibility, not
+        // just the search box. Previously this only triggered for q != ""; with
+        // the date + belt filters that gave misleading "no count" output when
+        // a date-only filter was active.
         if (q) {
           searchCountEl.textContent = visCount + " result" + (visCount === 1 ? "" : "s");
           searchKbd.style.display = "none";
@@ -1391,8 +1701,10 @@ var complaintsPageTemplate = template.Must(template.New("complaints-page").Parse
           searchKbd.style.display = searchInput === document.activeElement ? "none" : "";
         }
 
-        // Distribution bar (unfiltered)
+        // Distribution bar + belt-filter tabs (unfiltered — they reflect the
+        // full payload, independent of search and active belt).
         renderDistBar(payload.groups);
+        renderBeltTabs(payload.groups);
 
         // Groups
         if (filtered.length === 0) {
@@ -1427,7 +1739,100 @@ var complaintsPageTemplate = template.Must(template.New("complaints-page").Parse
             openResolveModal(btn.dataset.apiId, btn.dataset.complaintNo, btn);
           });
         });
+
+        // Bind village drill-down buttons
+        contentEl.querySelectorAll(".villages-btn").forEach((btn) => {
+          btn.addEventListener("click", (e) => {
+            e.stopPropagation(); // don't trigger group collapse
+            openVillagesPopover(btn.dataset.beltKey, btn);
+          });
+        });
       }
+
+      // ── Village drill-down popover ──
+      // Single shared popover element so we never have two open at once;
+      // re-positioned and re-populated each time a button is clicked.
+      let villagesPopover = null;
+
+      function closeVillagesPopover() {
+        if (villagesPopover) {
+          villagesPopover.remove();
+          villagesPopover = null;
+        }
+      }
+
+      async function openVillagesPopover(beltKey, anchor) {
+        // Toggle off if the popover already belongs to this anchor.
+        if (villagesPopover && villagesPopover.dataset.anchorBelt === beltKey) {
+          closeVillagesPopover();
+          return;
+        }
+        closeVillagesPopover();
+
+        // Create immediately with a loading state so the click is responsive
+        // even on a slow upstream.
+        const pop = document.createElement("div");
+        pop.className = "villages-popover";
+        pop.dataset.anchorBelt = beltKey;
+        pop.innerHTML = '<div class="villages-popover-title">Villages</div>' +
+          '<div class="villages-popover-empty">Loading…</div>';
+        document.body.appendChild(pop);
+        positionPopover(pop, anchor);
+        villagesPopover = pop;
+
+        try {
+          const resp = await fetch("/villages?belt=" + encodeURIComponent(beltKey));
+          if (!resp.ok) throw new Error("HTTP " + resp.status);
+          const data = await resp.json();
+          if (villagesPopover !== pop) return; // user clicked another button mid-flight
+          renderVillagesPopover(pop, data);
+          positionPopover(pop, anchor); // re-position now that content size changed
+        } catch (err) {
+          if (villagesPopover !== pop) return;
+          pop.innerHTML = '<div class="villages-popover-title">Villages</div>' +
+            '<div class="villages-popover-empty">Failed to load: ' + esc(String(err.message || err)) + '</div>';
+        }
+      }
+
+      function renderVillagesPopover(pop, data) {
+        const villages = (data && data.villages) || [];
+        const title = '<div class="villages-popover-title">' +
+          esc((data && data.belt) || "Villages") +
+          ' <span style="color:var(--text-faint);font-weight:500;text-transform:none;letter-spacing:0">(' + (data.total || 0) + ' total)</span>' +
+          '</div>';
+        if (villages.length === 0) {
+          pop.innerHTML = title + '<div class="villages-popover-empty">No villages on file.</div>';
+          return;
+        }
+        const rows = villages.map((v) =>
+          '<div class="villages-popover-row"><span class="v-name">' + esc(v.name) + '</span>' +
+            '<span class="v-count">' + v.count + '</span></div>'
+        ).join("");
+        pop.innerHTML = title + rows;
+      }
+
+      // positionPopover anchors the popover below the button, keeping it in the
+      // viewport horizontally so it doesn't get clipped on narrow screens.
+      function positionPopover(pop, anchor) {
+        const rect = anchor.getBoundingClientRect();
+        const popRect = pop.getBoundingClientRect();
+        const margin = 8;
+        let left = rect.left + window.scrollX;
+        if (left + popRect.width + margin > window.innerWidth) {
+          left = window.innerWidth - popRect.width - margin;
+        }
+        if (left < margin) left = margin;
+        pop.style.top = (rect.bottom + window.scrollY + 4) + "px";
+        pop.style.left = left + "px";
+      }
+
+      // Click-outside / Escape closes the popover.
+      document.addEventListener("click", (e) => {
+        if (!villagesPopover) return;
+        if (villagesPopover.contains(e.target)) return;
+        if (e.target.closest(".villages-btn")) return;
+        closeVillagesPopover();
+      });
 
       // ── Resolve modal ──
       const resolveModal    = $("resolveModal");
@@ -1578,6 +1983,49 @@ var complaintsPageTemplate = template.Must(template.New("complaints-page").Parse
         if (!searchInput.value) searchKbd.style.display = "";
       });
 
+      // Initialise the date inputs from URL state on boot.
+      if (activeFromDate) fromDateEl.value = activeFromDate;
+      if (activeToDate) toDateEl.value = activeToDate;
+      updateDateFilterChrome();
+
+      function syncDateFilterURL() {
+        const u = new URL(location.href);
+        if (activeFromDate) u.searchParams.set("from", activeFromDate); else u.searchParams.delete("from");
+        if (activeToDate) u.searchParams.set("to", activeToDate); else u.searchParams.delete("to");
+        history.replaceState(null, "", u.toString());
+      }
+
+      // updateDateFilterChrome flips the active styling on the wrapper and
+      // shows/hides the clear button so the operator can tell at a glance
+      // whether a date filter is in effect.
+      function updateDateFilterChrome() {
+        const active = !!(activeFromDate || activeToDate);
+        if (dateFilterEl) dateFilterEl.classList.toggle("active", active);
+        if (dateClearBtn) dateClearBtn.hidden = !active;
+      }
+
+      fromDateEl.addEventListener("change", () => {
+        activeFromDate = fromDateEl.value || "";
+        syncDateFilterURL();
+        updateDateFilterChrome();
+        render();
+      });
+      toDateEl.addEventListener("change", () => {
+        activeToDate = toDateEl.value || "";
+        syncDateFilterURL();
+        updateDateFilterChrome();
+        render();
+      });
+      dateClearBtn.addEventListener("click", () => {
+        activeFromDate = "";
+        activeToDate = "";
+        fromDateEl.value = "";
+        toDateEl.value = "";
+        syncDateFilterURL();
+        updateDateFilterChrome();
+        render();
+      });
+
       debugToggleBtn.addEventListener("click", () => {
         document.body.classList.toggle("show-debug");
         debugToggleBtn.classList.toggle("active", document.body.classList.contains("show-debug"));
@@ -1601,6 +2049,7 @@ var complaintsPageTemplate = template.Must(template.New("complaints-page").Parse
           searchInput.focus();
         }
         if (e.key === "Escape") {
+          if (villagesPopover) { closeVillagesPopover(); return; }
           if (resolveModal.classList.contains("open")) { closeResolveModal(); return; }
           if (document.activeElement === searchInput) {
             searchInput.value = "";
@@ -1617,182 +2066,3 @@ var complaintsPageTemplate = template.Must(template.New("complaints-page").Parse
   </script>
 </body>
 </html>`))
-
-func registerComplaintDashboard(mux *http.ServeMux, monitor *Monitor, sc *session.Client, stor *storage.Storage, refreshFn RefreshFunc) {
-	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path != "/" {
-			http.NotFound(w, r)
-			return
-		}
-		if r.Method != http.MethodGet {
-			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
-			return
-		}
-
-		w.Header().Set("Content-Type", "text/html; charset=utf-8")
-		_ = complaintsPageTemplate.Execute(w, complaintDashboardPageData{
-			DataURL: "/data",
-		})
-	})
-
-	mux.HandleFunc("/data", func(w http.ResponseWriter, r *http.Request) {
-		if r.Method != http.MethodGet {
-			writeJSONError(w, http.StatusMethodNotAllowed, "method not allowed")
-			return
-		}
-
-		payload, err := buildComplaintDashboardPayload(monitor, sc, stor)
-		if err != nil {
-			writeJSONError(w, http.StatusBadGateway, err.Error())
-			return
-		}
-
-		w.Header().Set("Content-Type", "application/json")
-		w.WriteHeader(http.StatusOK)
-		_ = json.NewEncoder(w).Encode(payload)
-	})
-
-	mux.HandleFunc("/refresh", func(w http.ResponseWriter, r *http.Request) {
-		if r.Method != http.MethodPost {
-			writeJSONError(w, http.StatusMethodNotAllowed, "method not allowed")
-			return
-		}
-
-		if refreshFn == nil {
-			writeJSONError(w, http.StatusServiceUnavailable, "refresh not available")
-			return
-		}
-
-		if err := refreshFn(); err != nil {
-			log.Printf("⚠️  Dashboard-triggered scrape failed: %v", err)
-			writeJSONError(w, http.StatusBadGateway, err.Error())
-			return
-		}
-
-		w.Header().Set("Content-Type", "application/json")
-		w.WriteHeader(http.StatusOK)
-		_ = json.NewEncoder(w).Encode(map[string]string{"status": "ok"})
-	})
-
-	// /resolve — mark a complaint as resolved on the DGVCL portal
-	mux.HandleFunc("/resolve", func(w http.ResponseWriter, r *http.Request) {
-		if r.Method != http.MethodPost {
-			writeJSONError(w, http.StatusMethodNotAllowed, "method not allowed")
-			return
-		}
-
-		var req struct {
-			ComplaintID string `json:"complaint_id"`
-			Remark      string `json:"remark"`
-		}
-		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-			writeJSONError(w, http.StatusBadRequest, "invalid JSON body")
-			return
-		}
-		if req.ComplaintID == "" {
-			writeJSONError(w, http.StatusBadRequest, "complaint_id is required")
-			return
-		}
-
-		remark := req.Remark
-		if remark == "" {
-			remark = "Resolved via dashboard"
-		}
-
-		log.Printf("🌐 Dashboard: resolving complaint API ID %s (remark: %q)", req.ComplaintID, remark)
-		if err := api.ResolveComplaint(sc, req.ComplaintID, remark, false); err != nil {
-			log.Printf("⚠️  Dashboard resolve failed for %s: %v", req.ComplaintID, err)
-			writeJSONError(w, http.StatusBadGateway, err.Error())
-			return
-		}
-
-		if WSHub != nil {
-			WSHub.BroadcastResolved(req.ComplaintID)
-		}
-
-		w.Header().Set("Content-Type", "application/json")
-		w.WriteHeader(http.StatusOK)
-		_ = json.NewEncoder(w).Encode(map[string]string{"status": "ok"})
-	})
-
-	mux.HandleFunc("/complaints", func(w http.ResponseWriter, r *http.Request) {
-		http.Redirect(w, r, "/", http.StatusPermanentRedirect)
-	})
-
-	mux.HandleFunc("/complaints/", func(w http.ResponseWriter, r *http.Request) {
-		switch r.URL.Path {
-		case "/complaints/", "/complaints":
-			http.Redirect(w, r, "/", http.StatusPermanentRedirect)
-		case "/complaints/data", "/complaints/data/":
-			http.Redirect(w, r, "/data", http.StatusPermanentRedirect)
-		default:
-			http.NotFound(w, r)
-		}
-	})
-}
-
-func buildComplaintDashboardPayload(monitor *Monitor, sc *session.Client, stor *storage.Storage) (complaintDashboardPayload, error) {
-	status := monitor.GetStatus()
-	activeIDs := stor.GetAllSeenComplaints()
-	if len(activeIDs) == 0 {
-		return complaintDashboardPayload{
-			GeneratedAt: time.Now().Format("02 Jan 2006, 03:04 PM"),
-			TotalCount:  0,
-			GroupCount:  0,
-			Status:      status,
-			Groups:      []complaintGroupPayload{},
-		}, nil
-	}
-
-	complaints, err := summary.FetchAllPendingDetails(sc, stor)
-	if err != nil {
-		if strings.Contains(err.Error(), "no pending complaints found") || strings.Contains(err.Error(), "no complaints with valid API IDs") {
-			return complaintDashboardPayload{
-				GeneratedAt: time.Now().Format("02 Jan 2006, 03:04 PM"),
-				TotalCount:  0,
-				GroupCount:  0,
-				Status:      status,
-				Groups:      []complaintGroupPayload{},
-			}, nil
-		}
-		return complaintDashboardPayload{}, fmt.Errorf("failed to fetch pending complaints: %w", err)
-	}
-
-	grouped := summary.GroupComplaints(complaints)
-	groups := make([]complaintGroupPayload, 0, len(grouped))
-	totalCount := 0
-	for _, group := range grouped {
-		style := belt.StyleFor(group.Belt)
-		totalCount += len(group.Complaints)
-		groups = append(groups, complaintGroupPayload{
-			Belt:       belt.DisplayName(group.Belt),
-			Label:      style.Label,
-			Emoji:      style.Emoji,
-			Count:      len(group.Complaints),
-			FillColor:  colorToHex(style.Fill),
-			TextColor:  colorToHex(style.Text),
-			Complaints: group.Complaints,
-		})
-	}
-
-	return complaintDashboardPayload{
-		GeneratedAt: time.Now().Format("02 Jan 2006, 03:04 PM"),
-		TotalCount:  totalCount,
-		GroupCount:  len(groups),
-		Status:      status,
-		Groups:      groups,
-	}, nil
-}
-
-func writeJSONError(w http.ResponseWriter, code int, message string) {
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(code)
-	_ = json.NewEncoder(w).Encode(map[string]string{
-		"error": message,
-	})
-}
-
-func colorToHex(c color.Color) string {
-	r, g, b, _ := c.RGBA()
-	return fmt.Sprintf("#%02x%02x%02x", uint8(r>>8), uint8(g>>8), uint8(b>>8))
-}

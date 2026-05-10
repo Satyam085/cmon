@@ -24,6 +24,7 @@ import (
 	"mime/multipart"
 	"net/http"
 	"os"
+	"strconv"
 
 	"strings"
 	"sync"
@@ -31,9 +32,29 @@ import (
 
 	"cmon/internal/api"
 	"cmon/internal/belt"
+	"cmon/internal/metrics"
 	"cmon/internal/session"
 	"cmon/internal/storage"
-	"cmon/internal/summary"
+)
+
+// Telegram timing constants. Pulled out so they're discoverable in one
+// place; the rate interval can additionally be overridden per-Client via
+// Client.rateInterval (set from TELEGRAM_RATE_INTERVAL_MS at construction).
+const (
+	// httpClientTimeout caps every HTTP call we make to the Bot API. Long
+	// polling holds the connection open for up to longPollSeconds, so this
+	// must comfortably exceed that — 60s gives a 30s buffer.
+	httpClientTimeout = 60 * time.Second
+
+	// longPollSeconds is what we send as `timeout` to getUpdates. The Bot API
+	// holds the request open for up to this many seconds before returning
+	// (with or without updates).
+	longPollSeconds = 30
+
+	// defaultRateInterval is the minimum spacing between outbound API calls
+	// when no override has been configured. ~28.5 req/s — safely under the
+	// Bot API's broadcast cap.
+	defaultRateInterval = 35 * time.Millisecond
 )
 
 // PendingResolution stores information about a complaint awaiting resolution note.
@@ -66,10 +87,29 @@ type PendingResolution struct {
 //   - ChatID: Target chat ID for notifications
 //   - DebugMode: If true, skip actual API calls (for testing)
 type Client struct {
-	BotToken    string
-	ChatID      string
-	mu          sync.Mutex
-	DebugMode   bool
+	BotToken  string
+	ChatID    string
+	mu        sync.Mutex
+	DebugMode bool
+	// rateInterval is the per-client override of defaultRateInterval, set
+	// from TELEGRAM_RATE_INTERVAL_MS at construction. Zero means use the
+	// default; values <=0 are treated as "use default" via effectiveRateInterval.
+	rateInterval time.Duration
+	// BeltRoutes maps lowercase canonical belt key to a chat ID override.
+	// When SendComplaintMessage receives a complaint whose belt matches a
+	// key here, the message goes to that chat instead of ChatID. Empty
+	// (nil) → routing disabled, every complaint goes to ChatID.
+	//
+	// Cross-channel edits (mark-as-resolved from main fetcher / WhatsApp
+	// reply) are also routed via ChatIDForBelt so the edit hits the same
+	// chat that received the original message.
+	//
+	// Caveat: interactive flows triggered by users in a routed chat
+	// (resolve-button callback prompt, /move acknowledgements, /summary
+	// reply) currently still post to ChatID. A user clicking resolve in a
+	// routed chat will see the resolution prompt land in the default chat.
+	// Tracked for a follow-up; not gating on this for the routing rollout.
+	BeltRoutes map[string]string
 	lastReqTime time.Time
 	// httpClient is a persistent client reused across all API calls for
 	// connection pooling — creating a new client per call defeats TCP reuse.
@@ -161,6 +201,10 @@ type EditMessageRequest struct {
 //
 // Returns:
 //   - *Client: Configured Telegram client, or nil if not configured
+//
+// BeltRoutes (per-belt chat overrides) are not populated here — the caller
+// can set client.BeltRoutes after construction if it wants per-belt routing
+// (typically from cfg.TelegramBeltRoutes in main).
 func NewClient() *Client {
 	botToken := os.Getenv("TELEGRAM_BOT_TOKEN")
 	chatID := os.Getenv("TELEGRAM_CHAT_ID")
@@ -184,14 +228,57 @@ func NewClient() *Client {
 	}
 
 	return &Client{
-		BotToken:  botToken,
-		ChatID:    chatID,
-		DebugMode: debugMode,
-		// 60s timeout: short polling is 30s + network overhead
+		BotToken:     botToken,
+		ChatID:       chatID,
+		DebugMode:    debugMode,
+		rateInterval: parseRateInterval(os.Getenv("TELEGRAM_RATE_INTERVAL_MS")),
+		// httpClientTimeout > longPollSeconds so the long-poll cycle never
+		// trips the HTTP timeout before the API replies on its own clock.
 		httpClient: &http.Client{
-			Timeout: 60 * time.Second,
+			Timeout: httpClientTimeout,
 		},
 	}
+}
+
+// parseRateInterval converts TELEGRAM_RATE_INTERVAL_MS (an integer count of
+// milliseconds) into a time.Duration. Empty or unparseable input → 0, which
+// effectiveRateInterval interprets as "use the default".
+func parseRateInterval(raw string) time.Duration {
+	if raw == "" {
+		return 0
+	}
+	ms, err := strconv.Atoi(raw)
+	if err != nil || ms <= 0 {
+		return 0
+	}
+	return time.Duration(ms) * time.Millisecond
+}
+
+// effectiveRateInterval returns the spacing this client should enforce
+// between outbound API calls. Centralised so doRequest doesn't have to
+// know about the zero-value-means-default convention.
+func (c *Client) effectiveRateInterval() time.Duration {
+	if c.rateInterval > 0 {
+		return c.rateInterval
+	}
+	return defaultRateInterval
+}
+
+// ChatIDForBelt returns the chat ID a complaint of the given canonical belt
+// should be sent to. Falls back to c.ChatID when no override exists. Public
+// so callers that edit a previously-sent message (the resolve flow) can
+// target the same chat the original message went to.
+func (c *Client) ChatIDForBelt(canonicalBelt string) string {
+	if c == nil {
+		return ""
+	}
+	if len(c.BeltRoutes) == 0 || canonicalBelt == "" {
+		return c.ChatID
+	}
+	if dest, ok := c.BeltRoutes[strings.ToLower(strings.TrimSpace(canonicalBelt))]; ok && dest != "" {
+		return dest
+	}
+	return c.ChatID
 }
 
 // doRequest handles the common logic for sending requests to Telegram API.
@@ -210,16 +297,32 @@ func NewClient() *Client {
 //   - map[string]interface{}: Parsed response
 //   - error: Request or API error
 func (c *Client) doRequest(method string, payload interface{}) (map[string]interface{}, error) {
+	result, err := c.doRequestRaw(method, payload)
+	// Only count outbound message-sending methods toward send metrics; skip
+	// long-polling getUpdates and similar control-plane calls.
+	if isOutboundSendMethod(method) {
+		if err != nil {
+			metrics.TelegramSendFailuresTotal.Inc()
+		} else {
+			metrics.TelegramSendsTotal.Inc()
+		}
+	}
+	return result, err
+}
+
+func (c *Client) doRequestRaw(method string, payload interface{}) (map[string]interface{}, error) {
 	jsonData, err := json.Marshal(payload)
 	if err != nil {
 		return nil, fmt.Errorf("failed to marshal payload: %w", err)
 	}
 
-	// Rate limiting for Telegram API (max 30 messages/second generally)
+	// Rate limiting for Telegram API. The interval comes from
+	// effectiveRateInterval so a client built with TELEGRAM_RATE_INTERVAL_MS
+	// can pace differently while still defaulting to the safe fallback.
+	rate := c.effectiveRateInterval()
 	c.mu.Lock()
-	// Allow 1 request every 35 milliseconds (~28.5 req/sec) to be safe
-	if time.Since(c.lastReqTime) < 35*time.Millisecond {
-		time.Sleep(35*time.Millisecond - time.Since(c.lastReqTime))
+	if elapsed := time.Since(c.lastReqTime); elapsed < rate {
+		time.Sleep(rate - elapsed)
 	}
 	c.lastReqTime = time.Now()
 	c.mu.Unlock()
@@ -250,6 +353,17 @@ func (c *Client) doRequest(method string, payload interface{}) (map[string]inter
 	}
 
 	return result, nil
+}
+
+// isOutboundSendMethod reports whether a Telegram API method represents an
+// outbound user-visible message. Used to filter out long-poll getUpdates and
+// similar control-plane calls from the send-rate metrics.
+func isOutboundSendMethod(method string) bool {
+	switch method {
+	case "sendMessage", "sendPhoto", "editMessageText", "editMessageReplyMarkup", "answerCallbackQuery":
+		return true
+	}
+	return false
 }
 
 // SendComplaintMessage sends a new complaint notification to Telegram.
@@ -343,7 +457,7 @@ func (c *Client) SendComplaintMessage(complaintJSON string, complaintNumber stri
 	}
 
 	telegramMsg := Message{
-		ChatID:                c.ChatID,
+		ChatID:                c.ChatIDForBelt(getValue("belt")),
 		Text:                  message,
 		ParseMode:             "HTML",
 		DisableWebPagePreview: true,
@@ -487,11 +601,19 @@ func (c *Client) EditMessageText(chatID, messageID, newText string) error {
 //
 // Returns:
 //   - error: Upload or API error
-func (c *Client) SendPhoto(chatID string, photoBytes []byte, caption string) error {
+func (c *Client) SendPhoto(chatID string, photoBytes []byte, caption string) (err error) {
 	if c == nil {
 		log.Println("   ⚠️  Telegram not configured, skipping photo send")
 		return nil
 	}
+
+	defer func() {
+		if err != nil {
+			metrics.TelegramSendFailuresTotal.Inc()
+		} else {
+			metrics.TelegramSendsTotal.Inc()
+		}
+	}()
 
 	log.Println("   📸 Sending photo to Telegram...")
 
@@ -523,16 +645,20 @@ func (c *Client) SendPhoto(chatID string, photoBytes []byte, caption string) err
 	}
 	req.Header.Set("Content-Type", writer.FormDataContentType())
 
-	client := &http.Client{Timeout: 30 * time.Second}
-	resp, err := client.Do(req)
+	resp, err := c.httpClient.Do(req)
 	if err != nil {
 		return fmt.Errorf("failed to send photo: %w", err)
 	}
 	defer resp.Body.Close()
 
-	respBody, _ := io.ReadAll(resp.Body)
+	respBody, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return fmt.Errorf("failed to read sendPhoto response body: %w", err)
+	}
 	var result map[string]interface{}
-	json.Unmarshal(respBody, &result)
+	if err := json.Unmarshal(respBody, &result); err != nil {
+		return fmt.Errorf("failed to unmarshal sendPhoto response (status %d, body %q): %w", resp.StatusCode, string(respBody), err)
+	}
 
 	if ok, exists := result["ok"].(bool); !exists || !ok {
 		return fmt.Errorf("Telegram sendPhoto error: %v", result)
@@ -562,7 +688,7 @@ func (c *Client) getUpdates(offset int) ([]Update, error) {
 
 	payload := map[string]interface{}{
 		"offset":  offset,
-		"timeout": 30, // Long polling timeout in seconds
+		"timeout": longPollSeconds,
 	}
 
 	result, err := c.doRequest("getUpdates", payload)
@@ -992,236 +1118,5 @@ func (c *Client) handleMessage(ctx context.Context, sc *session.Client, message 
 	log.Printf("✓ Successfully resolved complaint %s with note\n", pending.ComplaintNumber)
 }
 
-// handleSummaryCommand processes the /summary command.
-//
-// Flow:
-//  1. Extract browser context from interface
-//  2. Fetch details for all pending complaints
-//  3. Render table image
-//  4. Send image to Telegram
-//
-// If no pending complaints exist, sends a text message instead.
-func (c *Client) handleSummaryCommand(ctx context.Context, sc *session.Client, stor *storage.Storage) {
-	log.Println("📊 /summary command received")
-
-	processingMsg := Message{
-		ChatID:    c.ChatID,
-		Text:      "📊 <b>Generating summary...</b>\nFetching details for all pending complaints.",
-		ParseMode: "HTML",
-	}
-	c.doRequest("sendMessage", processingMsg)
-
-	// Fetch all pending complaint details
-	complaints, err := summary.FetchAllPendingDetails(sc, stor)
-	if err != nil {
-		log.Printf("⚠️  Summary fetch failed: %v\n", err)
-		noDataMsg := Message{
-			ChatID:    c.ChatID,
-			Text:      "ℹ️ No pending complaints found.",
-			ParseMode: "HTML",
-		}
-		c.doRequest("sendMessage", noDataMsg)
-		return
-	}
-
-	// Render combined table image
-	imgBytes, err := summary.RenderTable(complaints)
-	if err != nil {
-		log.Printf("⚠️  Summary render failed: %v\n", err)
-		errorMsg := Message{
-			ChatID:    c.ChatID,
-			Text:      fmt.Sprintf("❌ Failed to render summary image: %v", err),
-			ParseMode: "HTML",
-		}
-		c.doRequest("sendMessage", errorMsg)
-		return
-	}
-
-	caption := fmt.Sprintf("📋 %d Pending Complaints", len(complaints))
-	if err := c.SendPhoto(c.ChatID, imgBytes, caption); err != nil {
-		log.Printf("⚠️  Failed to send summary photo: %v\n", err)
-		errorMsg := Message{
-			ChatID:    c.ChatID,
-			Text:      fmt.Sprintf("❌ Failed to send summary image: %v", err),
-			ParseMode: "HTML",
-		}
-		c.doRequest("sendMessage", errorMsg)
-		return
-	}
-
-	log.Println("✓ Summary image sent successfully")
-}
-
-// handleSummaryBeltCommand processes the /summarybelt command, sending one
-// image per belt instead of a single combined image.
-func (c *Client) handleSummaryBeltCommand(ctx context.Context, sc *session.Client, stor *storage.Storage) {
-	log.Println("📊 /summarybelt command received")
-
-	processingMsg := Message{
-		ChatID:    c.ChatID,
-		Text:      "📊 <b>Generating belt-wise summary...</b>\nRendering one image per belt.",
-		ParseMode: "HTML",
-	}
-	c.doRequest("sendMessage", processingMsg)
-
-	complaints, err := summary.FetchAllPendingDetails(sc, stor)
-	if err != nil {
-		log.Printf("⚠️  Belt summary fetch failed: %v\n", err)
-		noDataMsg := Message{
-			ChatID:    c.ChatID,
-			Text:      "ℹ️ No pending complaints found.",
-			ParseMode: "HTML",
-		}
-		c.doRequest("sendMessage", noDataMsg)
-		return
-	}
-
-	beltImages, err := summary.RenderTablesByBelt(complaints)
-	if err != nil {
-		log.Printf("⚠️  Belt summary render failed: %v\n", err)
-		errorMsg := Message{
-			ChatID:    c.ChatID,
-			Text:      fmt.Sprintf("❌ Failed to render belt summary images: %v", err),
-			ParseMode: "HTML",
-		}
-		c.doRequest("sendMessage", errorMsg)
-		return
-	}
-
-	for _, bi := range beltImages {
-		caption := fmt.Sprintf("📋 %s Belt — %d Pending Complaints", bi.Label, bi.Count)
-		if err := c.SendPhoto(c.ChatID, bi.PNG, caption); err != nil {
-			log.Printf("⚠️  Failed to send %s belt summary photo: %v\n", bi.Label, err)
-			errorMsg := Message{
-				ChatID:    c.ChatID,
-				Text:      fmt.Sprintf("❌ Failed to send %s belt summary image: %v", bi.Label, err),
-				ParseMode: "HTML",
-			}
-			c.doRequest("sendMessage", errorMsg)
-			continue
-		}
-	}
-
-	log.Printf("✓ Belt summary sent (%d belt images, %d total complaints)\n",
-		len(beltImages), len(complaints))
-}
-
-func (c *Client) handleMoveCommand(message *IncomingMessage, stor *storage.Storage) {
-	text := strings.TrimSpace(message.Text)
-	args := strings.Fields(text)
-
-	var complaintID string
-	var beltInput string
-
-	switch {
-	case len(args) >= 2 && message.ReplyToMessage != nil:
-		complaintID = extractComplaintIDFromText(message.ReplyToMessage.Text)
-		beltInput = strings.TrimSpace(strings.TrimPrefix(text, args[0]))
-	case len(args) >= 3:
-		complaintID = strings.TrimSpace(args[1])
-		beltInput = strings.TrimSpace(strings.Join(args[2:], " "))
-	default:
-		c.sendMoveUsage()
-		return
-	}
-
-	if complaintID == "" {
-		c.sendTextMessage("❌ Could not find the complaint number. Reply to a complaint message with <code>/move belt-name</code> or use <code>/move complaint_id belt-name</code>.", "HTML")
-		return
-	}
-
-	newBelt, ok := belt.Canonicalize(beltInput)
-	if !ok {
-		c.sendTextMessage(fmt.Sprintf("❌ Unknown belt <b>%s</b>.\nValid belts: <code>%s</code>", htmlEscape(strings.TrimSpace(beltInput)), strings.Join(belt.All(), ", ")), "HTML")
-		return
-	}
-
-	if !stor.Exists(complaintID) {
-		c.sendTextMessage(fmt.Sprintf("❌ Complaint <b>%s</b> is not in active storage.", htmlEscape(complaintID)), "HTML")
-		return
-	}
-
-	oldBelt := belt.DisplayName(stor.GetBelt(complaintID))
-	if err := stor.UpdateBelt(complaintID, newBelt); err != nil {
-		log.Printf("⚠️  Failed to move complaint %s to %s: %v\n", complaintID, newBelt, err)
-		c.sendTextMessage(fmt.Sprintf("❌ Failed to update complaint <b>%s</b>.", htmlEscape(complaintID)), "HTML")
-		return
-	}
-
-	if message.ReplyToMessage != nil && message.ReplyToMessage.Text != "" {
-		updatedText, changed := rewriteComplaintBeltLine(message.ReplyToMessage.Text, newBelt)
-		if changed {
-			_, err := c.doRequest("editMessageText", EditMessageRequest{
-				ChatID:      c.ChatID,
-				MessageID:   fmt.Sprintf("%d", message.ReplyToMessage.MessageID),
-				Text:        updatedText,
-				ParseMode:   "HTML",
-				ReplyMarkup: nil,
-			})
-			if err != nil {
-				log.Printf("⚠️  Failed to edit complaint message for %s after move: %v\n", complaintID, err)
-			}
-		}
-	}
-
-	c.sendTextMessage(fmt.Sprintf("✅ Complaint <b>%s</b> moved from <b>%s</b> to <b>%s</b>.", htmlEscape(complaintID), htmlEscape(oldBelt), htmlEscape(newBelt)), "HTML")
-}
-
-func (c *Client) sendMoveUsage() {
-	c.sendTextMessage(
-		fmt.Sprintf("Usage:\n<code>/move complaint_id belt-name</code>\nOr reply to a complaint with <code>/move belt-name</code>\n\nValid belts: <code>%s</code>", strings.Join(belt.All(), ", ")),
-		"HTML",
-	)
-}
-
-func (c *Client) sendTextMessage(text, parseMode string) {
-	msg := Message{
-		ChatID:    c.ChatID,
-		Text:      text,
-		ParseMode: parseMode,
-	}
-	c.doRequest("sendMessage", msg)
-}
-
-func isMoveCommand(text string) bool {
-	fields := strings.Fields(strings.TrimSpace(text))
-	if len(fields) == 0 {
-		return false
-	}
-
-	return fields[0] == "/move"
-}
-
-func extractComplaintIDFromText(text string) string {
-	const prefix = "📋 Complaint : "
-
-	text = strings.TrimSpace(text)
-	if !strings.HasPrefix(text, prefix) {
-		return ""
-	}
-
-	rest := strings.TrimPrefix(text, prefix)
-	line, _, _ := strings.Cut(rest, "\n")
-	return strings.TrimSpace(line)
-}
-
-func rewriteComplaintBeltLine(text, beltName string) (string, bool) {
-	lines := strings.Split(text, "\n")
-	for i, line := range lines {
-		if strings.Contains(line, " Belt: ") {
-			lines[i] = fmt.Sprintf("%s Belt: %s", belt.StyleFor(beltName).Emoji, belt.DisplayName(beltName))
-			return strings.Join(lines, "\n"), true
-		}
-	}
-
-	return text, false
-}
-
-func htmlEscape(value string) string {
-	replacer := strings.NewReplacer(
-		"&", "&amp;",
-		"<", "&lt;",
-		">", "&gt;",
-	)
-	return replacer.Replace(value)
-}
+// Per-command handlers (handleSummaryCommand, handleSummaryBeltCommand,
+// handleMoveCommand) and their helpers live in commands.go.

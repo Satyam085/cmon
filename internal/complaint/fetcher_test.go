@@ -34,7 +34,10 @@ func withTempCWD(t *testing.T) {
 func TestFetchAllFailsOnIncompletePagination(t *testing.T) {
 	withTempCWD(t)
 
-	stor := storage.New()
+	stor, err := storage.New()
+	if err != nil {
+		t.Fatalf("storage.New: %v", err)
+	}
 	t.Cleanup(func() {
 		_ = stor.Close()
 	})

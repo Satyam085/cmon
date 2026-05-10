@@ -4,7 +4,7 @@ package complaint
 import (
 	"encoding/json"
 	"fmt"
-	"log"
+	"log/slog"
 	"sync"
 
 	"cmon/internal/session"
@@ -38,7 +38,7 @@ type WorkerPool struct {
 //   - workerCount: Number of concurrent workers
 //   - batchSize: Number of jobs to be submitted (sizes the channel to prevent deadlock)
 func NewWorkerPool(sc *session.Client, workerCount int, batchSize int) *WorkerPool {
-	log.Printf("  → Creating worker pool with %d workers...\n", workerCount)
+	slog.Info("creating worker pool", "workers", workerCount, "batch_size", batchSize)
 
 	// Channel must be at least as large as the batch to avoid the deadlock where
 	// the submission goroutine blocks while workers wait for results.
@@ -69,7 +69,7 @@ func NewWorkerPool(sc *session.Client, workerCount int, batchSize int) *WorkerPo
 		go worker.start()
 	}
 
-	log.Printf("  ✓ Worker pool started with %d workers\n", workerCount)
+	slog.Info("worker pool started", "workers", workerCount)
 	return pool
 }
 
@@ -97,7 +97,10 @@ func (w *Worker) start() {
 		result := w.processComplaint(job)
 		w.results <- result
 		if result.Error != nil {
-			log.Printf("  [Worker #%d] ✗ Failed to process %s: %v\n", w.id, job.ComplaintNumber, result.Error)
+			slog.Error("failed to process complaint",
+				"worker", w.id,
+				"complaint", job.ComplaintNumber,
+				"error", result.Error)
 		}
 	}
 }
