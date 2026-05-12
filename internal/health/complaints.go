@@ -1448,22 +1448,6 @@ var complaintsPageTemplate = template.Must(template.New("complaints-page").Parse
         return true;
       }
 
-      // formatAge mirrors the Go formatAge in summary/image.go: compact "3d 4h",
-      // "5h 12m", "23m" form. Returns "" for non-positive minutes so the cell
-      // stays blank rather than showing "0m".
-      function formatAge(minutes) {
-        const m = Number(minutes);
-        if (!Number.isFinite(m) || m <= 0) return "";
-        const d = Math.floor(m / (60 * 24));
-        const h = Math.floor((m % (60 * 24)) / 60);
-        const mins = m % 60;
-        if (d > 0 && h > 0) return d + "d " + h + "h";
-        if (d > 0) return d + "d";
-        if (h > 0 && mins > 0) return h + "h " + mins + "m";
-        if (h > 0) return h + "h";
-        return mins + "m";
-      }
-
       function timeAgo(date) {
         const sec = Math.floor((Date.now() - date.getTime()) / 1000);
         if (sec < 5) return "just now";
@@ -1545,7 +1529,6 @@ var complaintsPageTemplate = template.Must(template.New("complaints-page").Parse
           '<td data-label="Area">' + esc(c.area || "—") + '</td>' +
           '<td data-label="Description" class="desc-cell">' + esc(c.description || "—") + '</td>' +
           '<td data-label="Date" class="mono">' + esc(c.complain_date || "—") + '</td>' +
-          '<td data-label="Age" class="mono">' + esc(formatAge(c.age_minutes)) + '</td>' +
           '<td data-label="Telegram" class="debug-col mono">' + esc(tg) + '</td>' +
           '<td data-label="WhatsApp" class="debug-col mono">' + esc(wa) + '</td>' +
           '<td data-label="Action" class="action-col">' + resolveBtn + '</td>' +
@@ -1576,17 +1559,17 @@ var complaintsPageTemplate = template.Must(template.New("complaints-page").Parse
               '<col style="width:12%">' +
               '<col style="width:9%">' +
               '<col style="width:9%">' +
-              '<col style="width:16%">' +
+              '<col style="width:15%">' +
               '<col style="width:7%">' +
-              '<col style="width:21%">' +
-              '<col style="width:10%">' +
-              '<col class="debug-col" style="width:8%">' +
-              '<col class="debug-col" style="width:8%">' +
-              '<col class="action-col" style="width:8%">' +
+              '<col style="width:19%">' +
+              '<col style="width:9%">' +
+              '<col class="debug-col" style="width:7%">' +
+              '<col class="debug-col" style="width:7%">' +
+              '<col class="action-col" style="width:9%">' +
             '</colgroup>' +
             '<thead><tr>' +
               '<th class="complaint-col">Complaint</th><th>Name</th><th>Consumer</th><th>Mobile</th>' +
-              '<th>Address</th><th>Area</th><th>Description</th><th>Date</th><th>Age</th>' +
+              '<th>Address</th><th>Area</th><th>Description</th><th>Date</th>' +
               '<th class="debug-col">Telegram</th><th class="debug-col">WhatsApp</th>' +
               '<th class="action-col">Action</th>' +
             '</tr></thead>' +
