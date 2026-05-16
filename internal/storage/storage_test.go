@@ -106,8 +106,6 @@ func TestSaveMultiplePersistsDetailFields(t *testing.T) {
 		ComplaintID:  "CMP-DETAIL",
 		APIID:        "API-1",
 		ConsumerName: "Alice",
-		Village:      "Tokarva",
-		Belt:         "Bajipura",
 		MobileNo:     "9999999999",
 		Address:      "Plot 7, Lane 2",
 		Area:         "Bajipura",
@@ -143,9 +141,6 @@ func TestSaveMultiplePersistsDetailFields(t *testing.T) {
 	}
 	if got := stor.GetConsumerName("CMP-DETAIL"); got != "Alice" {
 		t.Errorf("SetDetails should not touch ConsumerName, got %q", got)
-	}
-	if got := stor.GetBelt("CMP-DETAIL"); got != "Bajipura" {
-		t.Errorf("SetDetails should not touch Belt, got %q", got)
 	}
 }
 
@@ -211,9 +206,7 @@ func TestUpgradeFromLegacySchema(t *testing.T) {
 			wa_message_id TEXT,
 			api_id TEXT,
 			consumer_name TEXT,
-			created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-			village TEXT,
-			belt TEXT
+			created_at DATETIME DEFAULT CURRENT_TIMESTAMP
 		);
 		CREATE TABLE pending_resolutions (
 			user_id INTEGER PRIMARY KEY,
@@ -223,8 +216,8 @@ func TestUpgradeFromLegacySchema(t *testing.T) {
 			prompt_message_id INTEGER,
 			created_at DATETIME DEFAULT CURRENT_TIMESTAMP
 		);
-		INSERT INTO complaints (complaint_id, tg_message_id, api_id, consumer_name, village, belt)
-		VALUES ('CMP-LEGACY', '42', 'API-LEGACY', 'Bob', 'Tokarva', 'Bajipura');
+		INSERT INTO complaints (complaint_id, tg_message_id, api_id, consumer_name)
+		VALUES ('CMP-LEGACY', '42', 'API-LEGACY', 'Bob');
 	`); err != nil {
 		t.Fatalf("seed legacy db: %v", err)
 	}
@@ -232,7 +225,7 @@ func TestUpgradeFromLegacySchema(t *testing.T) {
 		t.Fatalf("close legacy db: %v", err)
 	}
 
-	// Open with the current code — must add the 5 new columns, leave NULL
+	// Open with the current code — must add the new columns, leave NULL
 	// values readable as empty strings, and preserve the legacy row's data.
 	s, err := New()
 	if err != nil {
@@ -245,9 +238,6 @@ func TestUpgradeFromLegacySchema(t *testing.T) {
 	}
 	if got := s.GetConsumerName("CMP-LEGACY"); got != "Bob" {
 		t.Errorf("legacy ConsumerName after upgrade: got %q, want %q", got, "Bob")
-	}
-	if got := s.GetVillage("CMP-LEGACY"); got != "Tokarva" {
-		t.Errorf("legacy Village after upgrade: got %q, want %q", got, "Tokarva")
 	}
 	// New columns must read as empty (NULL → "") so dashboard treats them as
 	// "needs backfill" rather than crashing.

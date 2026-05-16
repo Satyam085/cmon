@@ -41,11 +41,11 @@ func TestEncodeGauge(t *testing.T) {
 
 func TestEncodeLabelledGaugeSorted(t *testing.T) {
 	r := NewRegistry()
-	r.RegisterLabelledGauge("baz", "baz description", "belt", func() map[string]float64 {
+	r.RegisterLabelledGauge("baz", "baz description", "kind", func() map[string]float64 {
 		return map[string]float64{
-			"zulu":   3,
-			"alpha":  1,
-			"bravo":  2,
+			"zulu":  3,
+			"alpha": 1,
+			"bravo": 2,
 		}
 	})
 
@@ -62,9 +62,9 @@ func TestEncodeLabelledGaugeSorted(t *testing.T) {
 
 	// Label lines must be in sorted order so scrape diffs stay readable.
 	wantOrder := []string{
-		`baz{belt="alpha"} 1`,
-		`baz{belt="bravo"} 2`,
-		`baz{belt="zulu"} 3`,
+		`baz{kind="alpha"} 1`,
+		`baz{kind="bravo"} 2`,
+		`baz{kind="zulu"} 3`,
 	}
 	idxs := make([]int, len(wantOrder))
 	for i, line := range wantOrder {

@@ -4,7 +4,7 @@
 //   - Connecting to WhatsApp via the multi-device API (using whatsmeow)
 //   - QR-code pairing on first run (stored session prevents re-pairing)
 //   - Sending plain-text complaint notifications to a configured recipient
-//   - Listening for incoming messages (/summary, /summarybelt, resolve-by-reply)
+//   - Listening for incoming messages (/summary, resolve-by-reply)
 //
 // Architecture:
 //   - Client: Main struct wrapping whatsmeow.Client + recipient JID + message tracker
@@ -30,7 +30,6 @@ import (
 	"strings"
 	"time"
 
-	"cmon/internal/belt"
 	"cmon/internal/complaintid"
 	"cmon/internal/metrics"
 
@@ -272,7 +271,6 @@ func (c *Client) sendImage(ctx context.Context, imgBytes []byte, caption string)
 //
 // This listens for:
 //   - "/summary" command → sends a single combined summary image
-//   - "/summarybelt" command → sends one summary image per belt
 //   - "resolve <remark>" reply to a tracked complaint message → resolves the complaint
 //     (only active when resolveEnabled is true)
 //
@@ -322,13 +320,6 @@ func (c *Client) HandleEvents(ctx context.Context, sc *session.Client, stor inte
 		}
 
 		lower := strings.ToLower(text)
-
-		// Handle /summarybelt command (per-belt images)
-		if lower == "/summarybelt" {
-			log.Println("📊 WhatsApp /summarybelt command received")
-			go c.handleSummaryBeltCommand(ctx, sc, stor)
-			return
-		}
 
 		// Handle /summary command
 		if lower == "/summary" {
@@ -439,56 +430,6 @@ func (c *Client) handleSummaryCommand(ctx context.Context, sc *session.Client, s
 	}
 }
 
-// handleSummaryBeltCommand fetches all pending complaints and sends one image
-// per belt (via /summarybelt). Honours ctx cancellation between belts so a
-// long burst can be aborted on shutdown.
-func (c *Client) handleSummaryBeltCommand(ctx context.Context, sc *session.Client, storI interface{}) {
-	if ctx.Err() != nil {
-		return
-	}
-	c.SendMessage("📊 Generating belt-wise summary... please wait.")
-
-	stor, ok := storI.(summaryStorage)
-	if !ok {
-		c.SendMessage("❌ Internal error: storage type mismatch.")
-		return
-	}
-
-	complaints, err := fetchPendingSummary(sc, stor)
-	if err != nil {
-		log.Printf("⚠️  WhatsApp belt summary fetch failed: %v", err)
-		c.SendMessage("ℹ️ No pending complaints found.")
-		return
-	}
-	if ctx.Err() != nil {
-		return
-	}
-
-	beltImages, err := renderSummaryImages(complaints)
-	if err != nil {
-		log.Printf("⚠️  WhatsApp belt summary render failed: %v", err)
-		c.SendMessage(fmt.Sprintf("❌ Failed to render belt summary images: %v", err))
-		return
-	}
-
-	var sendErrs int
-	for _, bi := range beltImages {
-		if ctx.Err() != nil {
-			return
-		}
-		caption := fmt.Sprintf("📋 %s Belt — %d Pending Complaints", bi.Label, bi.Count)
-		if err := c.sendImage(ctx, bi.PNG, caption); err != nil {
-			log.Printf("⚠️  WhatsApp belt summary image send failed for %s: %v", bi.Label, err)
-			sendErrs++
-		}
-	}
-
-	// Fallback to a text summary only if every belt image failed.
-	if sendErrs > 0 && sendErrs == len(beltImages) {
-		c.SendMessage(buildTextSummary(complaints))
-	}
-}
-
 // handleResolve resolves a complaint via the DGVCL API and updates tracking.
 // ctx is the parent HandleEvents context; checked at major boundaries so a
 // shutdown skips further work after the API call returns.
@@ -534,7 +475,7 @@ func (c *Client) handleResolve(ctx context.Context, sc *session.Client, stor res
 			time.Now().Format("02 Jan 2006, 03:04 PM"),
 		)
 
-		if err := tg.EditMessageText(tg.ChatIDForBelt(stor.GetBelt(complaintNumber)), messageID, resolvedMessage); err != nil {
+		if err := tg.EditMessageText(tg.ChatID, messageID, resolvedMessage); err != nil {
 			log.Printf("⚠️  WhatsApp resolved %s on website but failed to edit Telegram message: %v", complaintNumber, err)
 			telegramEditFailed = true
 		}
@@ -610,7 +551,6 @@ type resolveStorage interface {
 	GetComplaintIDByWAMessageID(waMessageID string) (string, bool)
 	GetConsumerName(complaintNumber string) string
 	GetMessageID(complaintNumber string) string
-	GetBelt(complaintNumber string) string
 	Exists(complaintNumber string) bool
 	Remove(complaintNumber string) error
 }
@@ -625,7 +565,6 @@ type storageSetter interface {
 var (
 	fetchPendingSummary = defaultFetchPendingSummary
 	renderSummaryImage  = defaultRenderSummaryImage
-	renderSummaryImages = defaultRenderSummaryImages
 	resolveComplaintAPI = defaultResolveComplaintAPI
 )
 
@@ -635,10 +574,6 @@ func defaultFetchPendingSummary(sc *session.Client, stor summaryStorage) ([]summ
 
 func defaultRenderSummaryImage(complaints []summaryComplaint) ([]byte, error) {
 	return renderTable(complaints)
-}
-
-func defaultRenderSummaryImages(complaints []summaryComplaint) ([]summaryBeltImage, error) {
-	return renderTablesByBelt(complaints)
 }
 
 func defaultResolveComplaintAPI(sc *session.Client, apiID, remark string, debugMode bool) error {
@@ -675,7 +610,7 @@ func buildTextSummary(complaints []summaryComplaint) string {
 	var b bytes.Buffer
 	b.WriteString(fmt.Sprintf("📋 *%d Pending Complaints*\n\n", len(complaints)))
 	for i, c := range complaints {
-		b.WriteString(fmt.Sprintf("%d. #%s — %s\n   %s\n   📍 %s\n", i+1, c.ComplainNo, c.Name, belt.MessageLabel(c.Belt), c.Address))
+		b.WriteString(fmt.Sprintf("%d. #%s — %s\n   📍 %s\n", i+1, c.ComplainNo, c.Name, c.Address))
 	}
 	return b.String()
 }

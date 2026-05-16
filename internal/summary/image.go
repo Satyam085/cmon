@@ -9,11 +9,8 @@ import (
 	"image/png"
 	"os"
 	"runtime"
-	"sort"
 	"strings"
 	"time"
-
-	"cmon/internal/belt"
 
 	"github.com/fogleman/gg"
 )
@@ -26,8 +23,6 @@ type Complaint struct {
 	MobileNo          string `json:"mobile_no"`
 	Address           string `json:"address"`
 	Area              string `json:"area"`
-	Village           string `json:"village"`
-	Belt              string `json:"belt"`
 	Description       string `json:"description"`
 	ComplainDate      string `json:"complain_date"`
 	TelegramMessageID string `json:"telegram_message_id"`
@@ -89,16 +84,6 @@ func computeAgeMinutes(complainDate string, now time.Time) int64 {
 	return int64(delta / time.Minute)
 }
 
-// BeltImage is one rendered summary image for a single belt, returned by
-// RenderTablesByBelt so callers can send each image with a belt-specific caption.
-type BeltImage struct {
-	Belt       string
-	Label      string
-	Count      int
-	PNG        []byte
-	Complaints []Complaint
-}
-
 // renderScale is a global oversampling factor. Telegram converts photos to
 // JPEG and resizes for in-chat display; rendering at a higher resolution
 // gives the compressor more detail to work with, so post-compression text
@@ -113,7 +98,6 @@ const (
 	cellPaddingY  = 16 * renderScale
 	minRowHeight  = 76 * renderScale
 	headerHeight  = 88 * renderScale
-	groupHeaderH  = 64 * renderScale
 	fontSize      = 26 * renderScale
 	headerFontSz  = 26 * renderScale
 	titleFontSz   = 40 * renderScale
@@ -137,11 +121,6 @@ var (
 	footerColor     = color.RGBA{R: 100, G: 116, B: 139, A: 255} // Muted slate
 )
 
-type complaintGroup struct {
-	belt       string
-	complaints []Complaint
-}
-
 // column definition for the table.
 type column struct {
 	header   string
@@ -160,6 +139,57 @@ var columns = []column{
 	{"Description", func(c *Complaint) string { return c.Description }, maxDescWidth},
 	{"Date", func(c *Complaint) string { return c.ComplainDate }, 0},
 	{"Age", func(c *Complaint) string { return c.AgeString() }, 0},
+}
+
+func encodeImage(img image.Image) ([]byte, error) {
+	var buf bytes.Buffer
+	if err := png.Encode(&buf, img); err != nil {
+		return nil, fmt.Errorf("failed to encode PNG: %w", err)
+	}
+	return buf.Bytes(), nil
+}
+
+func complaintDateLess(a, b Complaint) bool {
+	at, aok := parseComplaintDate(a.ComplainDate)
+	bt, bok := parseComplaintDate(b.ComplainDate)
+	if aok && bok {
+		if at.Equal(bt) {
+			return a.ComplainNo < b.ComplainNo
+		}
+		return at.Before(bt)
+	}
+	if aok != bok {
+		return aok
+	}
+	if a.ComplainDate == b.ComplainDate {
+		return a.ComplainNo < b.ComplainNo
+	}
+	return a.ComplainDate < b.ComplainDate
+}
+
+func parseComplaintDate(value string) (time.Time, bool) {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return time.Time{}, false
+	}
+
+	layouts := []string{
+		"2006-01-02 15:04:05",
+		"2006-01-02 15:04",
+		"2006-01-02",
+		"02-01-2006 15:04:05",
+		"02-01-2006 15:04",
+		"02-01-2006",
+		"02/01/2006 15:04:05",
+		"02/01/2006 15:04",
+		"02/01/2006",
+	}
+	for _, layout := range layouts {
+		if ts, err := time.ParseInLocation(layout, value, time.Local); err == nil {
+			return ts, true
+		}
+	}
+	return time.Time{}, false
 }
 
 // findFont locates a font file across Linux and Windows paths.
@@ -273,15 +303,14 @@ func computeRowHeights(dc *gg.Context, complaints []Complaint, colWidths []float
 	return heights
 }
 
-// RenderTable renders all pending complaints as a single combined image,
-// grouped by belt with a colored group-header row separating each belt's
-// complaints.
+// RenderTable renders all pending complaints as a single flat table image
+// sorted oldest-first by complain date.
 func RenderTable(complaints []Complaint) ([]byte, error) {
 	if len(complaints) == 0 {
 		return nil, fmt.Errorf("no complaints to render")
 	}
 
-	groups := groupComplaints(complaints)
+	complaints = SortComplaints(complaints)
 
 	boldFont, err := findFont(true)
 	if err != nil {
@@ -308,220 +337,6 @@ func RenderTable(complaints []Complaint) ([]byte, error) {
 	}
 
 	// Measure data widths (capped by maxWidth)
-	if err := tmpDC.LoadFontFace(regularFont, fontSize); err != nil {
-		return nil, fmt.Errorf("failed to load regular font: %w", err)
-	}
-	for _, group := range groups {
-		for _, c := range group.complaints {
-			c := c
-			for i, col := range columns {
-				w, _ := tmpDC.MeasureString(col.field(&c))
-				needed := w + cellPaddingX*2 + 4*renderScale
-				if needed > colWidths[i] {
-					colWidths[i] = needed
-				}
-			}
-		}
-	}
-
-	// Apply max width caps
-	for i, col := range columns {
-		if col.maxWidth > 0 && colWidths[i] > col.maxWidth {
-			colWidths[i] = col.maxWidth
-		}
-	}
-
-	// Compute row heights (for text wrapping)
-	rowHeightsByGroup := make([][]float64, len(groups))
-	var totalRowHeight float64
-	for i, group := range groups {
-		rowHeightsByGroup[i] = computeRowHeights(tmpDC, group.complaints, colWidths)
-		totalRowHeight += float64(groupHeaderH)
-		for _, h := range rowHeightsByGroup[i] {
-			totalRowHeight += h
-		}
-	}
-
-	// ---- Step 2: Calculate canvas size ----
-	var totalWidth float64
-	for _, w := range colWidths {
-		totalWidth += w
-	}
-
-	canvasWidth := totalWidth + float64(40*renderScale*2) // 40px logical margin each side
-	canvasHeight := float64(titlePadding) +
-		float64(headerHeight) +
-		totalRowHeight +
-		float64(footerPadding)
-
-	// ---- Step 3: Draw ----
-	dc := gg.NewContext(int(canvasWidth), int(canvasHeight))
-
-	// Background
-	dc.SetColor(bgColor)
-	dc.Clear()
-
-	// Title
-	dc.LoadFontFace(boldFont, titleFontSz)
-	dc.SetColor(titleColor)
-	title := fmt.Sprintf("Pending Complaints Summary Valod SDn  —  %s", time.Now().Format("02 Jan 2006, 03:04 PM"))
-	dc.DrawStringAnchored(title, canvasWidth/2, float64(titlePadding)/2+float64(2*renderScale), 0.5, 0.5)
-
-	tableX := float64(40 * renderScale)
-	tableY := float64(titlePadding)
-
-	// Header row background (rounded top corners)
-	dc.SetColor(headerBgColor)
-	dc.DrawRoundedRectangle(tableX, tableY, totalWidth, float64(headerHeight), float64(16*renderScale))
-	dc.Fill()
-
-	// Header text
-	dc.LoadFontFace(boldFont, headerFontSz)
-	dc.SetColor(headerTextColor)
-	x := tableX
-	for i, col := range columns {
-		tx := x + colWidths[i]/2
-		ty := tableY + float64(headerHeight)/2
-		dc.DrawStringAnchored(col.header, tx, ty, 0.5, 0.5)
-		x += colWidths[i]
-	}
-
-	// Data rows
-	dc.LoadFontFace(regularFont, fontSize)
-	_, lineH := dc.MeasureString("Ay")
-	lineSpacing := lineH + float64(4*renderScale)
-	curY := tableY + float64(headerHeight)
-
-	rowIdx := 0
-	for groupIdx, group := range groups {
-		drawGroupHeader(dc, boldFont, tableX, curY, totalWidth, group.belt, len(group.complaints))
-		curY += float64(groupHeaderH)
-
-		for complaintIdx, c := range group.complaints {
-			c := c
-			rh := rowHeightsByGroup[groupIdx][complaintIdx]
-
-			if rowIdx%2 == 0 {
-				dc.SetColor(rowEvenColor)
-			} else {
-				dc.SetColor(rowOddColor)
-			}
-			dc.DrawRectangle(tableX, curY, totalWidth, rh)
-			dc.Fill()
-
-			dc.SetColor(borderColor)
-			dc.SetLineWidth(0.5 * renderScale)
-			dc.DrawLine(tableX, curY+rh, tableX+totalWidth, curY+rh)
-			dc.Stroke()
-
-			dc.LoadFontFace(regularFont, fontSize)
-			dc.SetColor(textColor)
-			x := tableX
-			for i, col := range columns {
-				text := col.field(&c)
-				innerWidth := colWidths[i] - cellPaddingX*2
-				wrapped := wrapText(dc, text, innerWidth)
-
-				totalTextH := float64(len(wrapped)) * lineSpacing
-				startY := curY + (rh-totalTextH)/2 + lineH
-
-				for lineIdx, line := range wrapped {
-					ly := startY + float64(lineIdx)*lineSpacing
-					dc.DrawString(line, x+cellPaddingX, ly)
-				}
-				x += colWidths[i]
-			}
-
-			curY += rh
-			rowIdx++
-		}
-	}
-
-	// Outer table border
-	dc.SetColor(borderColor)
-	dc.SetLineWidth(1 * renderScale)
-	totalTableH := float64(headerHeight) + totalRowHeight
-	dc.DrawRoundedRectangle(tableX, tableY, totalWidth, totalTableH, float64(16*renderScale))
-	dc.Stroke()
-
-	// Vertical column borders
-	dc.SetLineWidth(0.5 * renderScale)
-	x = tableX
-	for i := 0; i < len(columns)-1; i++ {
-		x += colWidths[i]
-		dc.DrawLine(x, tableY+float64(headerHeight), x, tableY+totalTableH)
-		dc.Stroke()
-	}
-
-	// Footer
-	dc.LoadFontFace(regularFont, 24*renderScale)
-	dc.SetColor(footerColor)
-	footer := fmt.Sprintf("Total: %d pending complaints", len(complaints))
-	dc.DrawStringAnchored(footer, canvasWidth/2, canvasHeight-float64(30*renderScale), 0.5, 0.5)
-
-	// ---- Step 4: Encode to PNG ----
-	return encodeImage(dc.Image())
-}
-
-// RenderTablesByBelt groups complaints by belt and renders one image per belt.
-// Each image has the belt name in the title so callers can send them as
-// independent photos. The returned slice follows the same belt ordering as
-// GroupComplaints (oldest complaint first, then alphabetical tie-break).
-func RenderTablesByBelt(complaints []Complaint) ([]BeltImage, error) {
-	if len(complaints) == 0 {
-		return nil, fmt.Errorf("no complaints to render")
-	}
-
-	groups := groupComplaints(complaints)
-	out := make([]BeltImage, 0, len(groups))
-	for _, g := range groups {
-		style := belt.StyleFor(g.belt)
-		png, err := RenderBeltTable(style.Label, g.complaints)
-		if err != nil {
-			return nil, fmt.Errorf("render %s belt: %w", style.Label, err)
-		}
-		out = append(out, BeltImage{
-			Belt:       g.belt,
-			Label:      style.Label,
-			Count:      len(g.complaints),
-			PNG:        png,
-			Complaints: g.complaints,
-		})
-	}
-	return out, nil
-}
-
-// RenderBeltTable renders a single belt's complaints as a table image.
-// beltLabel is shown in the title and footer; complaints should already be
-// filtered to that belt and sorted by the caller.
-func RenderBeltTable(beltLabel string, complaints []Complaint) ([]byte, error) {
-	if len(complaints) == 0 {
-		return nil, fmt.Errorf("no complaints to render for belt %q", beltLabel)
-	}
-
-	boldFont, err := findFont(true)
-	if err != nil {
-		return nil, fmt.Errorf("failed to load bold font: %w", err)
-	}
-	regularFont, err := findFont(false)
-	if err != nil {
-		return nil, fmt.Errorf("failed to load regular font: %w", err)
-	}
-
-	tmpDC := gg.NewContext(1, 1)
-	if err := tmpDC.LoadFontFace(boldFont, headerFontSz); err != nil {
-		return nil, fmt.Errorf("failed to load bold font: %w", err)
-	}
-
-	colWidths := make([]float64, len(columns))
-	for i, col := range columns {
-		w, _ := tmpDC.MeasureString(col.header)
-		colWidths[i] = w + cellPaddingX*2 + 4*renderScale
-		if colWidths[i] < float64(minColWidth) {
-			colWidths[i] = float64(minColWidth)
-		}
-	}
-
 	if err := tmpDC.LoadFontFace(regularFont, fontSize); err != nil {
 		return nil, fmt.Errorf("failed to load regular font: %w", err)
 	}
@@ -566,8 +381,7 @@ func RenderBeltTable(beltLabel string, complaints []Complaint) ([]byte, error) {
 
 	dc.LoadFontFace(boldFont, titleFontSz)
 	dc.SetColor(titleColor)
-	title := fmt.Sprintf("Pending Complaints — %s Belt — %s",
-		beltLabel, time.Now().Format("02 Jan 2006, 03:04 PM"))
+	title := fmt.Sprintf("Pending Complaints Summary  —  %s", time.Now().Format("02 Jan 2006, 03:04 PM"))
 	dc.DrawStringAnchored(title, canvasWidth/2, float64(titlePadding)/2+float64(2*renderScale), 0.5, 0.5)
 
 	tableX := float64(40 * renderScale)
@@ -646,120 +460,8 @@ func RenderBeltTable(beltLabel string, complaints []Complaint) ([]byte, error) {
 
 	dc.LoadFontFace(regularFont, 24*renderScale)
 	dc.SetColor(footerColor)
-	footer := fmt.Sprintf("%s Belt — %d pending complaints", beltLabel, len(complaints))
+	footer := fmt.Sprintf("Total: %d pending complaints", len(complaints))
 	dc.DrawStringAnchored(footer, canvasWidth/2, canvasHeight-float64(30*renderScale), 0.5, 0.5)
 
 	return encodeImage(dc.Image())
-}
-
-func encodeImage(img image.Image) ([]byte, error) {
-	var buf bytes.Buffer
-	if err := png.Encode(&buf, img); err != nil {
-		return nil, fmt.Errorf("failed to encode PNG: %w", err)
-	}
-	return buf.Bytes(), nil
-}
-
-func groupComplaints(complaints []Complaint) []complaintGroup {
-	grouped := make(map[string][]Complaint)
-	for _, complaint := range complaints {
-		belt := strings.TrimSpace(complaint.Belt)
-		if belt == "" {
-			belt = "Unknown"
-			complaint.Belt = belt
-		}
-		grouped[belt] = append(grouped[belt], complaint)
-	}
-
-	groups := make([]complaintGroup, 0, len(grouped))
-	for belt, items := range grouped {
-		sort.Slice(items, func(i, j int) bool {
-			return complaintDateLess(items[i], items[j])
-		})
-		groups = append(groups, complaintGroup{belt: belt, complaints: items})
-	}
-
-	sort.Slice(groups, func(i, j int) bool {
-		if len(groups[i].complaints) == 0 || len(groups[j].complaints) == 0 {
-			return groups[i].belt < groups[j].belt
-		}
-		left := groups[i].complaints[0]
-		right := groups[j].complaints[0]
-		if complaintDateLess(left, right) {
-			return true
-		}
-		if complaintDateLess(right, left) {
-			return false
-		}
-		return groups[i].belt < groups[j].belt
-	})
-
-	return groups
-}
-
-func complaintDateLess(a, b Complaint) bool {
-	at, aok := parseComplaintDate(a.ComplainDate)
-	bt, bok := parseComplaintDate(b.ComplainDate)
-	if aok && bok {
-		if at.Equal(bt) {
-			return a.ComplainNo < b.ComplainNo
-		}
-		return at.Before(bt)
-	}
-	if aok != bok {
-		return aok
-	}
-	if a.ComplainDate == b.ComplainDate {
-		return a.ComplainNo < b.ComplainNo
-	}
-	return a.ComplainDate < b.ComplainDate
-}
-
-func parseComplaintDate(value string) (time.Time, bool) {
-	value = strings.TrimSpace(value)
-	if value == "" {
-		return time.Time{}, false
-	}
-
-	layouts := []string{
-		"2006-01-02 15:04:05",
-		"2006-01-02 15:04",
-		"2006-01-02",
-		"02-01-2006 15:04:05",
-		"02-01-2006 15:04",
-		"02-01-2006",
-		"02/01/2006 15:04:05",
-		"02/01/2006 15:04",
-		"02/01/2006",
-	}
-	for _, layout := range layouts {
-		if ts, err := time.ParseInLocation(layout, value, time.Local); err == nil {
-			return ts, true
-		}
-	}
-	return time.Time{}, false
-}
-
-func drawGroupHeader(dc *gg.Context, boldFont string, x, y, width float64, beltName string, count int) {
-	style := belt.StyleFor(beltName)
-	dc.SetColor(style.Fill)
-	dc.DrawRectangle(x, y, width, float64(groupHeaderH))
-	dc.Fill()
-
-	dc.SetColor(borderColor)
-	dc.SetLineWidth(0.5 * renderScale)
-	dc.DrawLine(x, y+float64(groupHeaderH), x+width, y+float64(groupHeaderH))
-	dc.Stroke()
-
-	dc.LoadFontFace(boldFont, headerFontSz-2*renderScale)
-	circleX := x + cellPaddingX + float64(10*renderScale)
-	circleY := y + float64(groupHeaderH)/2
-
-	dc.SetColor(style.Text)
-	dc.DrawCircle(circleX, circleY, float64(8*renderScale))
-	dc.Fill()
-
-	dc.SetColor(style.Text)
-	label := fmt.Sprintf("%s Belt  •  %d complaints", style.Label, count)
-	dc.DrawString(label, circleX+float64(20*renderScale), y+float64(groupHeaderH)/2+float64(10*renderScale))
 }

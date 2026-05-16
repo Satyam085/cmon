@@ -67,12 +67,6 @@ type Config struct {
 	TelegramBotToken string // Telegram bot API token
 	TelegramChatID   string // Telegram chat ID for notifications
 
-	// TelegramBeltRoutes maps a canonical belt key to a Telegram chat ID
-	// override. Complaints whose belt is in the map are routed to the
-	// matching chat instead of TelegramChatID. Empty disables routing.
-	// Parsed from TELEGRAM_BELT_ROUTES env, format: "belt=chatID,belt=chatID".
-	TelegramBeltRoutes map[string]string
-
 	// WhatsApp configuration (optional)
 	WhatsAppRecipientJID  string // Target JID, e.g. 919876543210@s.whatsapp.net
 	WhatsAppDBPath        string // Path to SQLite session DB (default: whatsapp.db)
@@ -168,9 +162,8 @@ func LoadConfig() (*Config, error) {
 		WaitTimeout:       getEnvDuration("WAIT_TIMEOUT", 45*time.Second),       // 45s for element waits
 
 		// Telegram - optional, notifications disabled if not set
-		TelegramBotToken:   os.Getenv("TELEGRAM_BOT_TOKEN"),
-		TelegramChatID:     os.Getenv("TELEGRAM_CHAT_ID"),
-		TelegramBeltRoutes: parseBeltRoutes(os.Getenv("TELEGRAM_BELT_ROUTES")),
+		TelegramBotToken: os.Getenv("TELEGRAM_BOT_TOKEN"),
+		TelegramChatID:   os.Getenv("TELEGRAM_CHAT_ID"),
 
 		// WhatsApp - optional, notifications disabled if not set.
 		// Resolve-by-reply defaults to true now that the flow is fully
@@ -278,42 +271,6 @@ func getEnvFloat(key string, defaultValue float64) float64 {
 		}
 	}
 	return defaultValue
-}
-
-// parseBeltRoutes turns "dahod=-1001234, bajipura=-1005678" into a map
-// keyed by lowercase belt name. Tokens that don't fit the
-// "<key>=<chat_id>" shape are dropped silently — strict parsing keeps the
-// scheduler from sending to a half-typed chat ID. Empty input → nil.
-//
-// Belt keys are lowercased for case-insensitive matching against canonical
-// belt names returned by belt.Resolve, but the chat ID is stored verbatim
-// because Telegram chat IDs include a leading "-" (group/channel marker).
-func parseBeltRoutes(raw string) map[string]string {
-	raw = strings.TrimSpace(raw)
-	if raw == "" {
-		return nil
-	}
-	out := map[string]string{}
-	for _, tok := range strings.Split(raw, ",") {
-		tok = strings.TrimSpace(tok)
-		if tok == "" {
-			continue
-		}
-		eq := strings.IndexByte(tok, '=')
-		if eq <= 0 || eq == len(tok)-1 {
-			continue
-		}
-		key := strings.ToLower(strings.TrimSpace(tok[:eq]))
-		chatID := strings.TrimSpace(tok[eq+1:])
-		if key == "" || chatID == "" {
-			continue
-		}
-		out[key] = chatID
-	}
-	if len(out) == 0 {
-		return nil
-	}
-	return out
 }
 
 // parseScheduleList turns "09:00, 18:00" into ["09:00", "18:00"]. Tokens

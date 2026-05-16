@@ -56,27 +56,6 @@ var (
 	)
 )
 
-// RegisterOpenComplaintsByBelt wires the `cmon_open_complaints` gauge family
-// to a live storage query. Call once during startup after storage is ready.
-func RegisterOpenComplaintsByBelt(fn func() map[string]int) {
-	if fn == nil {
-		return
-	}
-	Default.RegisterLabelledGauge(
-		"cmon_open_complaints",
-		"Number of currently-open (unresolved) complaints, partitioned by belt.",
-		"belt",
-		func() map[string]float64 {
-			counts := fn()
-			out := make(map[string]float64, len(counts))
-			for k, v := range counts {
-				out[k] = float64(v)
-			}
-			return out
-		},
-	)
-}
-
 // Handler returns an http.Handler that serves the default registry.
 func Handler() http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

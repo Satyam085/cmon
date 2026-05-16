@@ -8,12 +8,10 @@ package health
 import (
 	"encoding/json"
 	"fmt"
-	"image/color"
 	"net/http"
 	"strings"
 	"time"
 
-	"cmon/internal/belt"
 	"cmon/internal/session"
 	"cmon/internal/storage"
 	"cmon/internal/summary"
@@ -26,9 +24,8 @@ func buildComplaintDashboardPayload(monitor *Monitor, sc *session.Client, stor *
 		return complaintDashboardPayload{
 			GeneratedAt: time.Now().Format("02 Jan 2006, 03:04 PM"),
 			TotalCount:  0,
-			GroupCount:  0,
 			Status:      status,
-			Groups:      []complaintGroupPayload{},
+			Complaints:  []summary.Complaint{},
 		}, nil
 	}
 
@@ -38,37 +35,20 @@ func buildComplaintDashboardPayload(monitor *Monitor, sc *session.Client, stor *
 			return complaintDashboardPayload{
 				GeneratedAt: time.Now().Format("02 Jan 2006, 03:04 PM"),
 				TotalCount:  0,
-				GroupCount:  0,
 				Status:      status,
-				Groups:      []complaintGroupPayload{},
+				Complaints:  []summary.Complaint{},
 			}, nil
 		}
 		return complaintDashboardPayload{}, fmt.Errorf("failed to fetch pending complaints: %w", err)
 	}
 
-	grouped := summary.GroupComplaints(complaints)
-	groups := make([]complaintGroupPayload, 0, len(grouped))
-	totalCount := 0
-	for _, group := range grouped {
-		style := belt.StyleFor(group.Belt)
-		totalCount += len(group.Complaints)
-		groups = append(groups, complaintGroupPayload{
-			Belt:       belt.DisplayName(group.Belt),
-			Label:      style.Label,
-			Emoji:      style.Emoji,
-			Count:      len(group.Complaints),
-			FillColor:  colorToHex(style.Fill),
-			TextColor:  colorToHex(style.Text),
-			Complaints: group.Complaints,
-		})
-	}
+	sorted := summary.SortComplaints(complaints)
 
 	return complaintDashboardPayload{
 		GeneratedAt: time.Now().Format("02 Jan 2006, 03:04 PM"),
-		TotalCount:  totalCount,
-		GroupCount:  len(groups),
+		TotalCount:  len(sorted),
 		Status:      status,
-		Groups:      groups,
+		Complaints:  sorted,
 	}, nil
 }
 
@@ -78,9 +58,4 @@ func writeJSONError(w http.ResponseWriter, code int, message string) {
 	_ = json.NewEncoder(w).Encode(map[string]string{
 		"error": message,
 	})
-}
-
-func colorToHex(c color.Color) string {
-	r, g, b, _ := c.RGBA()
-	return fmt.Sprintf("#%02x%02x%02x", uint8(r>>8), uint8(g>>8), uint8(b>>8))
 }

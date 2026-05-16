@@ -301,54 +301,6 @@ func TestLoadConfigInvalidDurationFallsBackToDefault(t *testing.T) {
 	}
 }
 
-func TestParseBeltRoutes(t *testing.T) {
-	cases := []struct {
-		name string
-		in   string
-		want map[string]string
-	}{
-		{"empty", "", nil},
-		{"whitespace", "   ", nil},
-		{"single pair", "dahod=-1001234", map[string]string{"dahod": "-1001234"}},
-		{"two pairs", "dahod=-1001234,bajipura=-1005678", map[string]string{
-			"dahod":    "-1001234",
-			"bajipura": "-1005678",
-		}},
-		{"surrounding whitespace", "  dahod = -1001234 , bajipura = -1005678 ", map[string]string{
-			"dahod":    "-1001234",
-			"bajipura": "-1005678",
-		}},
-		{"key lowercased", "DAHOD=123,Bajipura=456", map[string]string{
-			"dahod":    "123",
-			"bajipura": "456",
-		}},
-		{"missing equals dropped", "dahod 123,bajipura=456", map[string]string{
-			"bajipura": "456",
-		}},
-		{"empty key dropped", "=123,dahod=456", map[string]string{
-			"dahod": "456",
-		}},
-		{"empty value dropped", "dahod=,bajipura=456", map[string]string{
-			"bajipura": "456",
-		}},
-		{"trailing equals dropped", "dahod=", nil},
-		{"only invalid tokens returns nil", "garbage,more garbage", nil},
-	}
-	for _, tc := range cases {
-		t.Run(tc.name, func(t *testing.T) {
-			got := parseBeltRoutes(tc.in)
-			if len(got) != len(tc.want) {
-				t.Fatalf("len: got %d (%v), want %d (%v)", len(got), got, len(tc.want), tc.want)
-			}
-			for k, v := range tc.want {
-				if got[k] != v {
-					t.Errorf("[%s]: got %q, want %q", k, got[k], v)
-				}
-			}
-		})
-	}
-}
-
 func TestParseScheduleList(t *testing.T) {
 	cases := []struct {
 		name string

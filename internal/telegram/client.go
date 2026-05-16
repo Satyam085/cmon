@@ -31,7 +31,6 @@ import (
 	"time"
 
 	"cmon/internal/api"
-	"cmon/internal/belt"
 	"cmon/internal/metrics"
 	"cmon/internal/session"
 	"cmon/internal/storage"
@@ -95,22 +94,7 @@ type Client struct {
 	// from TELEGRAM_RATE_INTERVAL_MS at construction. Zero means use the
 	// default; values <=0 are treated as "use default" via effectiveRateInterval.
 	rateInterval time.Duration
-	// BeltRoutes maps lowercase canonical belt key to a chat ID override.
-	// When SendComplaintMessage receives a complaint whose belt matches a
-	// key here, the message goes to that chat instead of ChatID. Empty
-	// (nil) → routing disabled, every complaint goes to ChatID.
-	//
-	// Cross-channel edits (mark-as-resolved from main fetcher / WhatsApp
-	// reply) are also routed via ChatIDForBelt so the edit hits the same
-	// chat that received the original message.
-	//
-	// Caveat: interactive flows triggered by users in a routed chat
-	// (resolve-button callback prompt, /move acknowledgements, /summary
-	// reply) currently still post to ChatID. A user clicking resolve in a
-	// routed chat will see the resolution prompt land in the default chat.
-	// Tracked for a follow-up; not gating on this for the routing rollout.
-	BeltRoutes map[string]string
-	lastReqTime time.Time
+	lastReqTime  time.Time
 	// httpClient is a persistent client reused across all API calls for
 	// connection pooling — creating a new client per call defeats TCP reuse.
 	httpClient *http.Client
@@ -201,10 +185,6 @@ type EditMessageRequest struct {
 //
 // Returns:
 //   - *Client: Configured Telegram client, or nil if not configured
-//
-// BeltRoutes (per-belt chat overrides) are not populated here — the caller
-// can set client.BeltRoutes after construction if it wants per-belt routing
-// (typically from cfg.TelegramBeltRoutes in main).
 func NewClient() *Client {
 	botToken := os.Getenv("TELEGRAM_BOT_TOKEN")
 	chatID := os.Getenv("TELEGRAM_CHAT_ID")
@@ -262,23 +242,6 @@ func (c *Client) effectiveRateInterval() time.Duration {
 		return c.rateInterval
 	}
 	return defaultRateInterval
-}
-
-// ChatIDForBelt returns the chat ID a complaint of the given canonical belt
-// should be sent to. Falls back to c.ChatID when no override exists. Public
-// so callers that edit a previously-sent message (the resolve flow) can
-// target the same chat the original message went to.
-func (c *Client) ChatIDForBelt(canonicalBelt string) string {
-	if c == nil {
-		return ""
-	}
-	if len(c.BeltRoutes) == 0 || canonicalBelt == "" {
-		return c.ChatID
-	}
-	if dest, ok := c.BeltRoutes[strings.ToLower(strings.TrimSpace(canonicalBelt))]; ok && dest != "" {
-		return dest
-	}
-	return c.ChatID
 }
 
 // doRequest handles the common logic for sending requests to Telegram API.
@@ -418,7 +381,6 @@ func (c *Client) SendComplaintMessage(complaintJSON string, complaintNumber stri
 	// Format message with emojis and structure
 	message := fmt.Sprintf(
 		"📋 Complaint : %s\n\n"+
-			"%s Belt: %s\n"+
 			"👤 %s\n"+
 			"📞 %s\n"+
 			"🆔 Consumer: %s\n"+
@@ -426,8 +388,6 @@ func (c *Client) SendComplaintMessage(complaintJSON string, complaintNumber stri
 			"💬 <b>Details:</b>\n%s\n"+
 			"📍 %s, %s",
 		getValue("complain_no"),
-		belt.StyleFor(getValue("belt")).Emoji,
-		belt.DisplayName(getValue("belt")),
 		getValue("complainant_name"),
 		getValue("mobile_no"),
 		getValue("consumer_no"),
@@ -457,7 +417,7 @@ func (c *Client) SendComplaintMessage(complaintJSON string, complaintNumber stri
 	}
 
 	telegramMsg := Message{
-		ChatID:                c.ChatIDForBelt(getValue("belt")),
+		ChatID:                c.ChatID,
 		Text:                  message,
 		ParseMode:             "HTML",
 		DisableWebPagePreview: true,
@@ -482,13 +442,6 @@ func extractMessageID(result map[string]interface{}) string {
 		}
 	}
 	return ""
-}
-
-func defaultIfEmpty(value, fallback string) string {
-	if strings.TrimSpace(value) == "" {
-		return fallback
-	}
-	return value
 }
 
 // SendCriticalAlert sends a critical failure alert to Telegram.
@@ -955,17 +908,6 @@ func (c *Client) handleCallbackQuery(ctx context.Context, query *CallbackQuery, 
 //   - stor: Storage for complaint data
 func (c *Client) handleMessage(ctx context.Context, sc *session.Client, message *IncomingMessage, stor *storage.Storage) {
 	if message.From == nil || message.Text == "" {
-		return
-	}
-
-	if isMoveCommand(message.Text) {
-		c.handleMoveCommand(message, stor)
-		return
-	}
-
-	// Handle /summarybelt command (per-belt images)
-	if strings.TrimSpace(message.Text) == "/summarybelt" {
-		c.handleSummaryBeltCommand(ctx, sc, stor)
 		return
 	}
 

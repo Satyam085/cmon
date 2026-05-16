@@ -18,8 +18,6 @@ import (
 	"fmt"
 	"log"
 	"os"
-	"sort"
-	"strings"
 	"sync"
 	"time"
 
@@ -38,8 +36,6 @@ type Record struct {
 	WAMessageID  string
 	APIID        string
 	ConsumerName string
-	Village      string
-	Belt         string
 
 	// Cached complaint detail fields (sourced from the DGVCL detail API
 	// during scrape, used to render the dashboard without re-fetching).
@@ -60,8 +56,6 @@ type Storage struct {
 	waMessageToComplaint map[string]string // waMessageID → complaintID (Reverse lookup)
 	apiIDs               map[string]string // complaintID → API ID
 	consumerNames        map[string]string // complaintID → Consumer name
-	villages             map[string]string // complaintID → village
-	belts                map[string]string // complaintID → belt
 	mobileNos            map[string]string // complaintID → mobile number
 	addresses            map[string]string // complaintID → exact location
 	areas                map[string]string // complaintID → area
@@ -92,8 +86,6 @@ func New() (*Storage, error) {
 		waMessageToComplaint: make(map[string]string),
 		apiIDs:               make(map[string]string),
 		consumerNames:        make(map[string]string),
-		villages:             make(map[string]string),
-		belts:                make(map[string]string),
 		mobileNos:            make(map[string]string),
 		addresses:            make(map[string]string),
 		areas:                make(map[string]string),
@@ -151,8 +143,6 @@ func New() (*Storage, error) {
 	}
 
 	for _, col := range []struct{ name, typ string }{
-		{"village", "TEXT"},
-		{"belt", "TEXT"},
 		{"mobile_no", "TEXT"},
 		{"address", "TEXT"},
 		{"area", "TEXT"},
@@ -265,7 +255,7 @@ func (s *Storage) migrateFromCSV() {
 
 // loadFromDB loads all complaint data from SQLite into the in-memory maps.
 func (s *Storage) loadFromDB() {
-	rows, err := s.db.Query(`SELECT complaint_id, tg_message_id, wa_message_id, api_id, consumer_name, village, belt, mobile_no, address, area, description, complain_date FROM complaints`)
+	rows, err := s.db.Query(`SELECT complaint_id, tg_message_id, wa_message_id, api_id, consumer_name, mobile_no, address, area, description, complain_date FROM complaints`)
 	if err != nil {
 		log.Fatalf("❌ Failed to query database on load: %v", err)
 	}
@@ -273,9 +263,9 @@ func (s *Storage) loadFromDB() {
 
 	count := 0
 	for rows.Next() {
-		var complaintID, tgMessageID, waMessageID, apiID, consumerName, village, belt sql.NullString
+		var complaintID, tgMessageID, waMessageID, apiID, consumerName sql.NullString
 		var mobileNo, address, area, description, complainDate sql.NullString
-		if err := rows.Scan(&complaintID, &tgMessageID, &waMessageID, &apiID, &consumerName, &village, &belt, &mobileNo, &address, &area, &description, &complainDate); err != nil {
+		if err := rows.Scan(&complaintID, &tgMessageID, &waMessageID, &apiID, &consumerName, &mobileNo, &address, &area, &description, &complainDate); err != nil {
 			log.Printf("⚠️  Failed to scan row on load: %v", err)
 			continue
 		}
@@ -294,12 +284,6 @@ func (s *Storage) loadFromDB() {
 			}
 			if consumerName.Valid {
 				s.consumerNames[complaintID.String] = consumerName.String
-			}
-			if village.Valid {
-				s.villages[complaintID.String] = village.String
-			}
-			if belt.Valid {
-				s.belts[complaintID.String] = belt.String
 			}
 			if mobileNo.Valid {
 				s.mobileNos[complaintID.String] = mobileNo.String
@@ -441,20 +425,6 @@ func (s *Storage) GetConsumerName(complaintID string) string {
 	return s.consumerNames[complaintID]
 }
 
-// GetVillage retrieves the stored village for a complaint.
-func (s *Storage) GetVillage(complaintID string) string {
-	s.mu.RLock()
-	defer s.mu.RUnlock()
-	return s.villages[complaintID]
-}
-
-// GetBelt retrieves the stored belt for a complaint.
-func (s *Storage) GetBelt(complaintID string) string {
-	s.mu.RLock()
-	defer s.mu.RUnlock()
-	return s.belts[complaintID]
-}
-
 // GetMobileNo retrieves the cached mobile number for a complaint.
 func (s *Storage) GetMobileNo(complaintID string) string {
 	s.mu.RLock()
@@ -520,23 +490,6 @@ func (s *Storage) SetDetails(complaintID, mobileNo, address, area, description, 
 	return nil
 }
 
-// UpdateBelt persists a belt reassignment for an existing complaint.
-func (s *Storage) UpdateBelt(complaintID, belt string) error {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-
-	if !s.seen[complaintID] {
-		return fmt.Errorf("complaint %s not found in storage", complaintID)
-	}
-
-	if _, err := s.db.Exec(`UPDATE complaints SET belt = ? WHERE complaint_id = ?`, belt, complaintID); err != nil {
-		return err
-	}
-
-	s.belts[complaintID] = belt
-	return nil
-}
-
 // Exists checks if a complaint exists in memory.
 func (s *Storage) Exists(complaintID string) bool {
 	s.mu.RLock()
@@ -556,64 +509,6 @@ func (s *Storage) GetAllSeenComplaints() []string {
 	return complaints
 }
 
-// GetPendingCountsByBelt returns the current active complaint count per belt.
-func (s *Storage) GetPendingCountsByBelt() map[string]int {
-	s.mu.RLock()
-	defer s.mu.RUnlock()
-
-	counts := make(map[string]int)
-	for complaintID := range s.seen {
-		beltName := strings.TrimSpace(s.belts[complaintID])
-		counts[beltName]++
-	}
-
-	return counts
-}
-
-// GetVillageCountsByBelt returns village -> open complaint count for the
-// given belt. The belt argument is matched case-insensitively against the
-// raw canonical belt key stored on each complaint; callers that hold a
-// display name should canonicalise first via belt.Canonicalize.
-//
-// Empty / whitespace village names are bucketed under "Unknown" so the
-// drill-down view never shows an unlabelled row.
-func (s *Storage) GetVillageCountsByBelt(canonicalBelt string) map[string]int {
-	s.mu.RLock()
-	defer s.mu.RUnlock()
-
-	target := strings.ToLower(strings.TrimSpace(canonicalBelt))
-	counts := make(map[string]int)
-	for complaintID := range s.seen {
-		if strings.ToLower(strings.TrimSpace(s.belts[complaintID])) != target {
-			continue
-		}
-		village := strings.TrimSpace(s.villages[complaintID])
-		if village == "" {
-			village = "Unknown"
-		}
-		counts[village]++
-	}
-	return counts
-}
-
-// GetPendingComplaints returns complaint IDs grouped by belt.
-func (s *Storage) GetPendingComplaints() map[string][]string {
-	s.mu.RLock()
-	defer s.mu.RUnlock()
-
-	grouped := make(map[string][]string)
-	for complaintID := range s.seen {
-		beltName := strings.TrimSpace(s.belts[complaintID])
-		grouped[beltName] = append(grouped[beltName], complaintID)
-	}
-
-	for beltName := range grouped {
-		sort.Strings(grouped[beltName])
-	}
-
-	return grouped
-}
-
 // SaveMultiple atomically inserts NEW records into SQLite and updates memory.
 // Existing records are left untouched in the DB (INSERT OR IGNORE) to preserve
 // wa_message_id and other previously saved values.
@@ -627,8 +522,8 @@ func (s *Storage) SaveMultiple(records []Record) error {
 	}
 
 	stmt, err := tx.Prepare(`
-		INSERT INTO complaints (complaint_id, tg_message_id, wa_message_id, api_id, consumer_name, village, belt, mobile_no, address, area, description, complain_date)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		INSERT INTO complaints (complaint_id, tg_message_id, wa_message_id, api_id, consumer_name, mobile_no, address, area, description, complain_date)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 		ON CONFLICT(complaint_id) DO UPDATE SET
 			tg_message_id = CASE
 				WHEN excluded.tg_message_id != '' THEN excluded.tg_message_id
@@ -645,14 +540,6 @@ func (s *Storage) SaveMultiple(records []Record) error {
 			consumer_name = CASE
 				WHEN excluded.consumer_name != '' THEN excluded.consumer_name
 				ELSE complaints.consumer_name
-			END,
-			village = CASE
-				WHEN excluded.village != '' THEN excluded.village
-				ELSE complaints.village
-			END,
-			belt = CASE
-				WHEN excluded.belt != '' THEN excluded.belt
-				ELSE complaints.belt
 			END,
 			mobile_no = CASE
 				WHEN excluded.mobile_no != '' THEN excluded.mobile_no
@@ -682,7 +569,7 @@ func (s *Storage) SaveMultiple(records []Record) error {
 	defer stmt.Close()
 
 	for _, r := range records {
-		if _, err := stmt.Exec(r.ComplaintID, r.MessageID, r.WAMessageID, r.APIID, r.ConsumerName, r.Village, r.Belt, r.MobileNo, r.Address, r.Area, r.Description, r.ComplainDate); err != nil {
+		if _, err := stmt.Exec(r.ComplaintID, r.MessageID, r.WAMessageID, r.APIID, r.ConsumerName, r.MobileNo, r.Address, r.Area, r.Description, r.ComplainDate); err != nil {
 			tx.Rollback()
 			return err
 		}
@@ -712,12 +599,6 @@ func (s *Storage) SaveMultiple(records []Record) error {
 		}
 		if r.ConsumerName != "" {
 			s.consumerNames[r.ComplaintID] = r.ConsumerName
-		}
-		if r.Village != "" {
-			s.villages[r.ComplaintID] = r.Village
-		}
-		if r.Belt != "" {
-			s.belts[r.ComplaintID] = r.Belt
 		}
 		if r.MobileNo != "" {
 			s.mobileNos[r.ComplaintID] = r.MobileNo
@@ -773,8 +654,6 @@ func (s *Storage) Remove(complaintID string) error {
 	delete(s.waMessageIDs, complaintID)
 	delete(s.apiIDs, complaintID)
 	delete(s.consumerNames, complaintID)
-	delete(s.villages, complaintID)
-	delete(s.belts, complaintID)
 	delete(s.mobileNos, complaintID)
 	delete(s.addresses, complaintID)
 	delete(s.areas, complaintID)
@@ -823,8 +702,6 @@ func (s *Storage) RemoveIfExists(complaintID string) (bool, error) {
 	delete(s.waMessageIDs, complaintID)
 	delete(s.apiIDs, complaintID)
 	delete(s.consumerNames, complaintID)
-	delete(s.villages, complaintID)
-	delete(s.belts, complaintID)
 	delete(s.mobileNos, complaintID)
 	delete(s.addresses, complaintID)
 	delete(s.areas, complaintID)

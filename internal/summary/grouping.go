@@ -1,22 +1,13 @@
 package summary
 
-// ComplaintGroup is the grouped, sorted representation used by the summary
-// image and by the web dashboard.
-type ComplaintGroup struct {
-	Belt       string      `json:"belt"`
-	Complaints []Complaint `json:"complaints"`
-}
+import "sort"
 
-// GroupComplaints applies the same grouping and sort rules used by the summary
-// image so every view stays consistent.
-func GroupComplaints(complaints []Complaint) []ComplaintGroup {
-	grouped := groupComplaints(complaints)
-	out := make([]ComplaintGroup, 0, len(grouped))
-	for _, group := range grouped {
-		out = append(out, ComplaintGroup{
-			Belt:       group.belt,
-			Complaints: group.complaints,
-		})
-	}
+// SortComplaints orders complaints oldest-first with a ComplainNo tie-break.
+// Used by the summary image and the dashboard so every view stays consistent.
+func SortComplaints(complaints []Complaint) []Complaint {
+	out := append([]Complaint(nil), complaints...)
+	sort.Slice(out, func(i, j int) bool {
+		return complaintDateLess(out[i], out[j])
+	})
 	return out
 }

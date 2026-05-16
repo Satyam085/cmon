@@ -99,16 +99,8 @@ func main() {
 		log.Fatalf("❌ Failed to initialize storage: %v", err)
 	}
 
-	// Live gauge: cmon_open_complaints{belt=...}. Read from storage at scrape
-	// time so the value can never drift from the source of truth.
-	metrics.RegisterOpenComplaintsByBelt(stor.GetPendingCountsByBelt)
-
 	// Step 3: Initialize Telegram client (optional)
 	tg := telegram.NewClient()
-	if tg != nil && len(cfg.TelegramBeltRoutes) > 0 {
-		tg.BeltRoutes = cfg.TelegramBeltRoutes
-		log.Printf("✓ Telegram per-belt routing enabled for %d belt(s)", len(cfg.TelegramBeltRoutes))
-	}
 
 	// Step 3a: Initialize WhatsApp client (optional)
 	wa := whatsapp.NewClient()
@@ -470,7 +462,7 @@ func markResolvedComplaints(stor *storage.Storage, tg *telegram.Client, wa *what
 			if tg != nil {
 				if messageID == "" {
 					log.Printf("⚠️  Complaint %s has no Telegram message ID; removing from storage based on website state", complaintID)
-				} else if err := tg.EditMessageText(tg.ChatIDForBelt(stor.GetBelt(complaintID)), messageID, resolvedMessage); err != nil {
+				} else if err := tg.EditMessageText(tg.ChatID, messageID, resolvedMessage); err != nil {
 					log.Printf("⚠️  Failed to edit message for complaint %s: %v", complaintID, err)
 				}
 			}

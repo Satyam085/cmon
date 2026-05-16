@@ -15,21 +15,10 @@ type complaintDashboardPageData struct {
 }
 
 type complaintDashboardPayload struct {
-	GeneratedAt string                  `json:"generated_at"`
-	TotalCount  int                     `json:"total_count"`
-	GroupCount  int                     `json:"group_count"`
-	Status      Status                  `json:"status"`
-	Groups      []complaintGroupPayload `json:"groups"`
-}
-
-type complaintGroupPayload struct {
-	Belt       string              `json:"belt"`
-	Label      string              `json:"label"`
-	Emoji      string              `json:"emoji"`
-	Count      int                 `json:"count"`
-	FillColor  string              `json:"fill_color"`
-	TextColor  string              `json:"text_color"`
-	Complaints []summary.Complaint `json:"complaints"`
+	GeneratedAt string              `json:"generated_at"`
+	TotalCount  int                 `json:"total_count"`
+	Status      Status              `json:"status"`
+	Complaints  []summary.Complaint `json:"complaints"`
 }
 
 var complaintsPageTemplate = template.Must(template.New("complaints-page").Parse(`<!DOCTYPE html>

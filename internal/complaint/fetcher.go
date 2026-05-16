@@ -2,7 +2,6 @@
 package complaint
 
 import (
-	"context"
 	"encoding/json"
 	"fmt"
 	"log/slog"
@@ -10,7 +9,6 @@ import (
 	"strings"
 	"time"
 
-	"cmon/internal/belt"
 	"cmon/internal/config"
 	"cmon/internal/errors"
 	"cmon/internal/metrics"
@@ -196,13 +194,6 @@ func (f *Fetcher) processComplaintsConcurrently(complaints []Link) error {
 	translations := make([]translationResult, len(results))
 
 	for i, res := range results {
-		match := belt.Resolve(
-			safeStr(res.Details.Area),
-			safeStr(res.Details.ExactLocation),
-			safeStr(res.Details.Description),
-		)
-		res.Details.Village = match.Village
-		res.Details.Belt = match.Belt
 		results[i].Details = res.Details
 
 		name := safeStr(res.Details.ComplainantName)
@@ -211,19 +202,11 @@ func (f *Fetcher) processComplaintsConcurrently(complaints []Link) error {
 		area := safeStr(res.Details.Area)
 		addr := fmt.Sprintf("%s, %s", loc, area)
 
-		if f.translator != nil {
-			texts := []string{name, desc, addr}
-			translateCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-			out, err := f.translator.BatchTranslateToGujarati(translateCtx, texts)
-			cancel()
-			if err != nil {
-				translations[i] = translationResult{name, desc, addr}
-			} else {
-				translations[i] = translationResult{out[0], out[1], out[2]}
-			}
-		} else {
-			translations[i] = translationResult{name, desc, addr}
-		}
+		// Translation disabled: pass original text through unchanged. The
+		// translator package and its init are intentionally left intact so
+		// re-enabling is a one-line revert.
+		_ = f.translator
+		translations[i] = translationResult{name, desc, addr}
 	}
 
 	type notification struct {
@@ -252,8 +235,6 @@ func (f *Fetcher) processComplaintsConcurrently(complaints []Link) error {
 			ComplaintID:  res.ComplaintID,
 			APIID:        apiIDMap[res.ComplaintID],
 			ConsumerName: res.ConsumerName,
-			Village:      res.Details.Village,
-			Belt:         res.Details.Belt,
 			MobileNo:     safeStr(res.Details.MobileNo),
 			Address:      safeStr(res.Details.ExactLocation),
 			Area:         safeStr(res.Details.Area),
@@ -326,7 +307,6 @@ func buildWhatsAppMessage(details Details, gujaratiText string) string {
 
 	msg := fmt.Sprintf(
 		"📋 Complaint: %s\n\n"+
-			"%s Belt: %s\n"+
 			"👤 %s\n"+
 			"📞 %s\n"+
 			"🆔 Consumer: %s\n"+
@@ -334,8 +314,6 @@ func buildWhatsAppMessage(details Details, gujaratiText string) string {
 			"💬 Details:\n%s\n"+
 			"📍 %s, %s",
 		str(details.ComplainNo),
-		belt.StyleFor(details.Belt).Emoji,
-		belt.DisplayName(details.Belt),
 		str(details.ComplainantName),
 		str(details.MobileNo),
 		str(details.ConsumerNo),
@@ -350,10 +328,6 @@ func buildWhatsAppMessage(details Details, gujaratiText string) string {
 	}
 
 	return msg
-}
-
-func displayBelt(name string) string {
-	return belt.MessageLabel(name)
 }
 
 // onclickRe matches the API ID from onclick="openModelData(12345)"

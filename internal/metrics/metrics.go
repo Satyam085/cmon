@@ -9,7 +9,7 @@
 //
 // Counters are monotonically increasing uint64s. Gauges are int64 settable
 // from anywhere. Labelled gauges are populated at scrape time by a callback
-// (used for "open complaints by belt") so they always reflect live state.
+// so they always reflect live state.
 package metrics
 
 import (
@@ -121,7 +121,7 @@ func (r *Registry) NewGauge(name, help string) *Gauge {
 
 // RegisterLabelledGauge registers a callback-based gauge family. The callback
 // is invoked on every scrape and must return label-value → numeric-value.
-// Use this for metrics derived from live storage (open complaints by belt).
+// Use this for metrics derived from live storage.
 func (r *Registry) RegisterLabelledGauge(name, help, labelKey string, fn func() map[string]float64) {
 	if fn == nil {
 		return
