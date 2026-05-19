@@ -899,6 +899,16 @@ var complaintsPageTemplate = template.Must(template.New("complaints-page").Parse
       animation: spin 0.6s linear infinite;
     }
 
+    /* ── Site footer ── */
+    .site-footer {
+      text-align: center;
+      padding: 32px 0 18px;
+      font-family: var(--font-mono);
+      font-size: 11px;
+      color: var(--text-faint);
+      letter-spacing: 0.04em;
+    }
+
     /* ── Empty / error states ── */
     .empty-state {
       display: flex;
@@ -1078,7 +1088,7 @@ var complaintsPageTemplate = template.Must(template.New("complaints-page").Parse
       .shell { max-width: 100%; padding: 0; margin: 0; }
 
       /* Hide UI chrome */
-      .topbar, .stats-row, .toolbar, .banner, .dist-bar-wrap, .ws-status,
+      .topbar, .stats-row, .toolbar, .banner, .dist-bar-wrap, .ws-status, .site-footer,
       #resolveModal, .empty-state, .search-count, .search-kbd,
       .debug-col, .complaint-col, .action-col,
       .resolve-btn, .group-chevron { display: none !important; }
@@ -1345,6 +1355,8 @@ var complaintsPageTemplate = template.Must(template.New("complaints-page").Parse
     <!-- Content -->
     <section id="content" class="groups"></section>
   </main>
+
+  <footer class="site-footer">Made by Satyam</footer>
 
   <!-- Resolve Modal -->
   <div id="resolveModal" class="modal-backdrop" role="dialog" aria-modal="true" aria-labelledby="modalTitle">
