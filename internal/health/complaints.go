@@ -971,6 +971,7 @@ var complaintsPageTemplate = template.Must(template.New("complaints-page").Parse
 
       .toolbar { gap: 8px; }
       .search-box { flex: 1 1 100%; min-width: 0; }
+      .date-filter { width: 100%; box-sizing: border-box; }
       .search-box input {
         font-size: 16px;       /* prevents iOS auto-zoom on focus */
         padding: 9px 12px 9px 36px;
