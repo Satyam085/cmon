@@ -789,6 +789,13 @@ var complaintsPageTemplate = template.Must(template.New("complaints-page").Parse
     .resolve-btn:disabled { opacity: 0.5; cursor: not-allowed; }
     .resolve-btn svg { width: 13px; height: 13px; flex-shrink: 0; }
 
+    /* Resolved row — dimmed + non-interactive */
+    tr.row-resolved {
+      opacity: 0.35;
+      pointer-events: none;
+      transition: opacity 0.3s ease;
+    }
+
     /* ── Modal ── */
     .modal-backdrop {
       display: none;
@@ -2028,19 +2035,34 @@ var complaintsPageTemplate = template.Must(template.New("complaints-page").Parse
           const data = await resp.json().catch(() => ({}));
           if (!resp.ok) throw new Error(data.error || "Status " + resp.status);
 
-          // Visual feedback: dim resolved row
+          // Dim the row and disable the button so it looks resolved
+          // immediately. No DOM removal — keeps things stable during
+          // rapid-fire resolves.
           if (savedBtn) {
             const row = savedBtn.closest("tr");
-            if (row) { row.style.opacity = "0.4"; row.style.transition = "opacity 0.4s"; }
+            if (row) row.classList.add("row-resolved");
             savedBtn.disabled = true;
             savedBtn.innerHTML = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="20 6 9 17 4 12"/></svg> Resolved';
           }
 
+          // Silently purge from in-memory payload so the complaint
+          // won't reappear on the next render() / loadData() cycle.
+          if (payload && payload.groups) {
+            for (const g of payload.groups) {
+              const idx = g.complaints.findIndex(c => (c.api_id || "") === savedAPIID);
+              if (idx !== -1) {
+                g.complaints.splice(idx, 1);
+                g.count = g.complaints.length;
+                break;
+              }
+            }
+            payload.groups = payload.groups.filter(g => g.complaints.length > 0);
+            payload.total_count = payload.groups.reduce((s, g) => s + g.complaints.length, 0);
+            payload.group_count = payload.groups.length;
+          }
+
           closeResolveModal();
           setBanner("success", "<strong>Resolved.</strong> Complaint #" + esc(savedComplaintNo || savedAPIID) + " marked as resolved on the portal.");
-
-          // Silently reload after a short delay
-          setTimeout(() => loadData({ silent: true }), 3500);
         } catch (err) {
           setBanner("error", "<strong>Resolve failed.</strong> " + esc(err.message));
           closeResolveModal();
