@@ -656,6 +656,70 @@ var complaintsPageTemplate = template.Must(template.New("complaints-page").Parse
       font-style: italic;
       padding: 6px 0;
     }
+    .villages-popover-row.clickable {
+      cursor: pointer;
+      border-radius: var(--r-xs);
+      padding: 4px 6px;
+      margin: 0 -6px;
+      transition: background 0.1s;
+    }
+    .villages-popover-row.clickable:hover {
+      background: var(--accent-soft);
+    }
+    .villages-popover-row.active {
+      background: var(--accent-dim);
+      font-weight: 600;
+    }
+    .villages-popover-row.active .v-name {
+      color: var(--accent);
+    }
+
+    /* ── Village filter chip (toolbar) ── */
+    .village-filter-chip {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      padding: 5px 10px 5px 12px;
+      font-size: 12.5px;
+      font-weight: 600;
+      color: var(--accent);
+      background: var(--accent-dim);
+      border: 1px solid rgba(31,95,232,0.25);
+      border-radius: 999px;
+      white-space: nowrap;
+      animation: chip-in 0.2s ease-out;
+    }
+    @keyframes chip-in {
+      from { opacity: 0; transform: scale(0.92); }
+      to   { opacity: 1; transform: scale(1); }
+    }
+    .village-filter-chip svg { width: 12px; height: 12px; flex-shrink: 0; }
+    .village-filter-chip .vf-label {
+      font-size: 10px;
+      font-weight: 600;
+      text-transform: uppercase;
+      letter-spacing: 0.06em;
+      color: var(--text-dim);
+    }
+    .village-filter-clear {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      width: 18px;
+      height: 18px;
+      border: none;
+      background: transparent;
+      color: var(--accent);
+      cursor: pointer;
+      border-radius: 50%;
+      font-size: 14px;
+      line-height: 1;
+      padding: 0;
+      transition: background 0.12s;
+    }
+    .village-filter-clear:hover {
+      background: rgba(31,95,232,0.15);
+    }
 
     /* ── Table ── */
     .tbl-wrap { overflow-x: auto; }
@@ -1245,6 +1309,7 @@ var complaintsPageTemplate = template.Must(template.New("complaints-page").Parse
         <span class="search-kbd" id="searchKbd">/</span>
       </div>
       <span class="search-count" id="searchCount"></span>
+      <span id="villageFilterChip" style="display:none"></span>
 
       <div class="date-filter" title="Filter complaints by complain date (inclusive)">
         <span class="date-filter-label">Date</span>
@@ -1410,6 +1475,10 @@ var complaintsPageTemplate = template.Must(template.New("complaints-page").Parse
       let activeToDate = (new URLSearchParams(location.search).get("to") || "").trim();
       let collapsedBelts = new Set();
 
+      // Village filter — scoped to the active belt. Cleared when the belt
+      // changes because village names are belt-specific.
+      let activeVillage = (new URLSearchParams(location.search).get("village") || "").trim();
+
       // Utils
       const esc = (v) => String(v ?? "").replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;").replace(/"/g,"&quot;").replace(/'/g,"&#39;");
 
@@ -1507,6 +1576,46 @@ var complaintsPageTemplate = template.Must(template.New("complaints-page").Parse
       function matches(c, term) {
         if (!term) return true;
         return [c.complain_no, c.name, c.consumer_no, c.mobile_no, c.address, c.area, c.village, c.belt, c.description, c.complain_date, c.telegram_message_id, c.whatsapp_message_id].join(" ").toLowerCase().includes(term);
+      }
+
+      // Village filter match
+      function villageMatches(c, village) {
+        if (!village) return true;
+        const cv = (c.village || "").trim().toLowerCase();
+        return cv === village.toLowerCase();
+      }
+
+      // Sync village filter URL param
+      function syncVillageFilterURL() {
+        const u = new URL(location.href);
+        if (activeVillage) u.searchParams.set("village", activeVillage);
+        else u.searchParams.delete("village");
+        history.replaceState(null, "", u.toString());
+      }
+
+      // Render village filter chip in toolbar
+      function renderVillageFilterChip() {
+        const chip = $("villageFilterChip");
+        if (!chip) return;
+        if (!activeVillage) {
+          chip.style.display = "none";
+          chip.innerHTML = "";
+          return;
+        }
+        chip.style.display = "";
+        chip.innerHTML =
+          '<span class="village-filter-chip">' +
+            '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 21h18"/><path d="M5 21V8l7-5 7 5v13"/><path d="M9 21v-6h6v6"/></svg>' +
+            '<span class="vf-label">Village</span> ' +
+            esc(activeVillage) +
+            '<button class="village-filter-clear" type="button" title="Clear village filter">&times;</button>' +
+          '</span>';
+        chip.querySelector(".village-filter-clear").addEventListener("click", () => {
+          activeVillage = "";
+          syncVillageFilterURL();
+          renderVillageFilterChip();
+          render();
+        });
       }
 
       // Build table row
@@ -1607,6 +1716,12 @@ var complaintsPageTemplate = template.Must(template.New("complaints-page").Parse
             const key = btn.dataset.beltKey || "";
             if (key === activeBelt) return;
             activeBelt = key;
+            // Clear village filter when switching belts — villages are
+            // belt-specific so keeping a stale village filter would hide
+            // every complaint in the new belt.
+            activeVillage = "";
+            syncVillageFilterURL();
+            renderVillageFilterChip();
             // Sync the URL so refresh / share preserves the filter without
             // adding a navigation entry per click.
             const u = new URL(location.href);
@@ -1637,13 +1752,15 @@ var complaintsPageTemplate = template.Must(template.New("complaints-page").Parse
           .map((g) => ({
             ...g,
             complaints: g.complaints.filter((c) =>
-              matches(c, q) && dateInRange(c.complain_date, activeFromDate, activeToDate)
+              matches(c, q) &&
+              dateInRange(c.complain_date, activeFromDate, activeToDate) &&
+              villageMatches(c, activeVillage)
             ),
           }))
           .filter((g) => g.complaints.length > 0);
 
         const visCount = filtered.reduce((s, g) => s + g.complaints.length, 0);
-        const anyFilter = !!(q || activeBelt || activeFromDate || activeToDate);
+        const anyFilter = !!(q || activeBelt || activeFromDate || activeToDate || activeVillage);
 
         // Stats
         setMetric("totalCount", anyFilter ? visCount : payload.total_count);
@@ -1658,6 +1775,7 @@ var complaintsPageTemplate = template.Must(template.New("complaints-page").Parse
         setMetric("printGroups", anyFilter ? filtered.length : payload.group_count);
         const filterParts = [];
         if (activeBelt) filterParts.push("Belt: " + activeBelt);
+        if (activeVillage) filterParts.push("Village: " + activeVillage);
         if (activeFromDate || activeToDate) {
           filterParts.push("Date: " + (activeFromDate || "—") + " → " + (activeToDate || "—"));
         }
@@ -1688,6 +1806,7 @@ var complaintsPageTemplate = template.Must(template.New("complaints-page").Parse
         // full payload, independent of search and active belt).
         renderDistBar(payload.groups);
         renderBeltTabs(payload.groups);
+        renderVillageFilterChip();
 
         // Groups
         if (filtered.length === 0) {
@@ -1787,11 +1906,39 @@ var complaintsPageTemplate = template.Must(template.New("complaints-page").Parse
           pop.innerHTML = title + '<div class="villages-popover-empty">No villages on file.</div>';
           return;
         }
-        const rows = villages.map((v) =>
-          '<div class="villages-popover-row"><span class="v-name">' + esc(v.name) + '</span>' +
-            '<span class="v-count">' + v.count + '</span></div>'
-        ).join("");
-        pop.innerHTML = title + rows;
+        // "All" row to clear the village filter
+        const allActive = !activeVillage;
+        let allRow = '<div class="villages-popover-row clickable' + (allActive ? ' active' : '') + '" data-village="">' +
+          '<span class="v-name">All Villages</span>' +
+          '<span class="v-count">' + (data.total || 0) + '</span></div>';
+
+        const rows = villages.map((v) => {
+          const isActive = activeVillage && activeVillage.toLowerCase() === v.name.toLowerCase();
+          return '<div class="villages-popover-row clickable' + (isActive ? ' active' : '') + '" data-village="' + esc(v.name) + '">' +
+            '<span class="v-name">' + esc(v.name) + '</span>' +
+            '<span class="v-count">' + v.count + '</span></div>';
+        }).join("");
+        pop.innerHTML = title + allRow + rows;
+
+        // Bind click handlers for village filtering
+        pop.querySelectorAll(".villages-popover-row.clickable").forEach((row) => {
+          row.addEventListener("click", () => {
+            const village = row.dataset.village || "";
+            activeVillage = village;
+            // Auto-select the belt this popover belongs to if "All belts" is
+            // currently shown, so the village filter is meaningful.
+            if (village && !activeBelt && pop.dataset.anchorBelt) {
+              activeBelt = pop.dataset.anchorBelt;
+              const u = new URL(location.href);
+              u.searchParams.set("belt", activeBelt);
+              history.replaceState(null, "", u.toString());
+            }
+            syncVillageFilterURL();
+            renderVillageFilterChip();
+            closeVillagesPopover();
+            render();
+          });
+        });
       }
 
       // positionPopover anchors the popover below the button, keeping it in the
@@ -1833,7 +1980,7 @@ var complaintsPageTemplate = template.Must(template.New("complaints-page").Parse
         _pendingComplaintNo = complaintNo;
         _pendingBtn = btn;
         modalComplaintNo.textContent = complaintNo || apiID;
-        modalRemark.value = "";
+        modalRemark.value = "Restored";
         modalConfirmBtn.disabled = false;
         modalConfirmBtn.innerHTML = "Mark Resolved";
         resolveModal.classList.add("open");
