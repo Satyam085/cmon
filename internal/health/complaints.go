@@ -1098,7 +1098,7 @@ var complaintsPageTemplate = template.Must(template.New("complaints-page").Parse
       /* Hide UI chrome */
       .topbar, .stats-row, .toolbar, .banner, .dist-bar-wrap, .ws-status, .site-footer,
       #resolveModal, .empty-state, .search-count, .search-kbd,
-      .debug-col, .complaint-col, .action-col,
+      .debug-col, .action-col,
       .resolve-btn, .group-chevron { display: none !important; }
 
       /* Print header */
@@ -1218,15 +1218,15 @@ var complaintsPageTemplate = template.Must(template.New("complaints-page").Parse
       }
       colgroup { display: table-column-group !important; }
 
-      /* Print column widths (visible: Name, Consumer, Mobile, Address, Area, Description, Date) */
-      colgroup col:nth-child(1) { width: 0 !important; }   /* Complaint — hidden */
-      colgroup col:nth-child(2) { width: 13% !important; } /* Name */
-      colgroup col:nth-child(3) { width: 11% !important; } /* Consumer */
-      colgroup col:nth-child(4) { width: 11% !important; } /* Mobile */
-      colgroup col:nth-child(5) { width: 21% !important; } /* Address */
-      colgroup col:nth-child(6) { width: 13% !important; } /* Area */
-      colgroup col:nth-child(7) { width: 19% !important; } /* Description */
-      colgroup col:nth-child(8) { width: 12% !important; } /* Date */
+      /* Print column widths (visible: Complaint, Name, Consumer, Mobile, Address, Area, Description, Date) */
+      colgroup col:nth-child(1) { width: 11% !important; } /* Complaint */
+      colgroup col:nth-child(2) { width: 12% !important; } /* Name */
+      colgroup col:nth-child(3) { width: 10% !important; } /* Consumer */
+      colgroup col:nth-child(4) { width: 10% !important; } /* Mobile */
+      colgroup col:nth-child(5) { width: 19% !important; } /* Address */
+      colgroup col:nth-child(6) { width: 12% !important; } /* Area */
+      colgroup col:nth-child(7) { width: 17% !important; } /* Description */
+      colgroup col:nth-child(8) { width: 9% !important; }  /* Date */
       colgroup col:nth-child(9),
       colgroup col:nth-child(10),
       colgroup col:nth-child(11) { width: 0 !important; }  /* Telegram, WhatsApp, Action — hidden */
