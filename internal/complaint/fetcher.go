@@ -254,6 +254,7 @@ func (f *Fetcher) processComplaintsConcurrently(complaints []Link) error {
 			ConsumerName: res.ConsumerName,
 			Village:      res.Details.Village,
 			Belt:         res.Details.Belt,
+			ConsumerNo:   safeStr(res.Details.ConsumerNo),
 			MobileNo:     safeStr(res.Details.MobileNo),
 			Address:      safeStr(res.Details.ExactLocation),
 			Area:         safeStr(res.Details.Area),

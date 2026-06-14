@@ -108,6 +108,7 @@ func TestSaveMultiplePersistsDetailFields(t *testing.T) {
 		ConsumerName: "Alice",
 		Village:      "Tokarva",
 		Belt:         "Bajipura",
+		ConsumerNo:   "CONS-1111",
 		MobileNo:     "9999999999",
 		Address:      "Plot 7, Lane 2",
 		Area:         "Bajipura",
@@ -122,6 +123,7 @@ func TestSaveMultiplePersistsDetailFields(t *testing.T) {
 		got  string
 		want string
 	}{
+		{"ConsumerNo", stor.GetConsumerNo("CMP-DETAIL"), "CONS-1111"},
 		{"MobileNo", stor.GetMobileNo("CMP-DETAIL"), "9999999999"},
 		{"Address", stor.GetAddress("CMP-DETAIL"), "Plot 7, Lane 2"},
 		{"Area", stor.GetArea("CMP-DETAIL"), "Bajipura"},
@@ -135,8 +137,11 @@ func TestSaveMultiplePersistsDetailFields(t *testing.T) {
 	}
 
 	// SetDetails should overwrite existing fields without disturbing other data.
-	if err := stor.SetDetails("CMP-DETAIL", "8888888888", "New Addr", "New Area", "updated desc", "2026-05-10"); err != nil {
+	if err := stor.SetDetails("CMP-DETAIL", "CONS-2222", "8888888888", "New Addr", "New Area", "updated desc", "2026-05-10"); err != nil {
 		t.Fatalf("SetDetails: %v", err)
+	}
+	if got := stor.GetConsumerNo("CMP-DETAIL"); got != "CONS-2222" {
+		t.Errorf("SetDetails ConsumerNo: got %q, want %q", got, "CONS-2222")
 	}
 	if got := stor.GetMobileNo("CMP-DETAIL"); got != "8888888888" {
 		t.Errorf("SetDetails MobileNo: got %q, want %q", got, "8888888888")
@@ -260,11 +265,14 @@ func TestUpgradeFromLegacySchema(t *testing.T) {
 
 	// And the new SetDetails path must work on the legacy row (this is what
 	// the lazy-backfill code path in summary/fetcher.go calls).
-	if err := s.SetDetails("CMP-LEGACY", "777", "addr", "area", "desc", "2026-05-09"); err != nil {
+	if err := s.SetDetails("CMP-LEGACY", "CONS-L", "777", "addr", "area", "desc", "2026-05-09"); err != nil {
 		t.Fatalf("SetDetails on legacy row: %v", err)
 	}
 	if got := s.GetDescription("CMP-LEGACY"); got != "desc" {
 		t.Errorf("after backfill Description: got %q, want %q", got, "desc")
+	}
+	if got := s.GetConsumerNo("CMP-LEGACY"); got != "CONS-L" {
+		t.Errorf("after backfill ConsumerNo: got %q, want %q", got, "CONS-L")
 	}
 }
 

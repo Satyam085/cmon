@@ -43,6 +43,7 @@ type Record struct {
 
 	// Cached complaint detail fields (sourced from the DGVCL detail API
 	// during scrape, used to render the dashboard without re-fetching).
+	ConsumerNo   string // consumer account number
 	MobileNo     string
 	Address      string // exact_location
 	Area         string
@@ -62,6 +63,7 @@ type Storage struct {
 	consumerNames        map[string]string // complaintID → Consumer name
 	villages             map[string]string // complaintID → village
 	belts                map[string]string // complaintID → belt
+	consumerNos          map[string]string // complaintID → consumer account number
 	mobileNos            map[string]string // complaintID → mobile number
 	addresses            map[string]string // complaintID → exact location
 	areas                map[string]string // complaintID → area
@@ -94,6 +96,7 @@ func New() (*Storage, error) {
 		consumerNames:        make(map[string]string),
 		villages:             make(map[string]string),
 		belts:                make(map[string]string),
+		consumerNos:          make(map[string]string),
 		mobileNos:            make(map[string]string),
 		addresses:            make(map[string]string),
 		areas:                make(map[string]string),
@@ -153,6 +156,7 @@ func New() (*Storage, error) {
 	for _, col := range []struct{ name, typ string }{
 		{"village", "TEXT"},
 		{"belt", "TEXT"},
+		{"consumer_no", "TEXT"},
 		{"mobile_no", "TEXT"},
 		{"address", "TEXT"},
 		{"area", "TEXT"},
@@ -265,7 +269,7 @@ func (s *Storage) migrateFromCSV() {
 
 // loadFromDB loads all complaint data from SQLite into the in-memory maps.
 func (s *Storage) loadFromDB() {
-	rows, err := s.db.Query(`SELECT complaint_id, tg_message_id, wa_message_id, api_id, consumer_name, village, belt, mobile_no, address, area, description, complain_date FROM complaints`)
+	rows, err := s.db.Query(`SELECT complaint_id, tg_message_id, wa_message_id, api_id, consumer_name, village, belt, consumer_no, mobile_no, address, area, description, complain_date FROM complaints`)
 	if err != nil {
 		log.Fatalf("❌ Failed to query database on load: %v", err)
 	}
@@ -274,8 +278,8 @@ func (s *Storage) loadFromDB() {
 	count := 0
 	for rows.Next() {
 		var complaintID, tgMessageID, waMessageID, apiID, consumerName, village, belt sql.NullString
-		var mobileNo, address, area, description, complainDate sql.NullString
-		if err := rows.Scan(&complaintID, &tgMessageID, &waMessageID, &apiID, &consumerName, &village, &belt, &mobileNo, &address, &area, &description, &complainDate); err != nil {
+		var consumerNo, mobileNo, address, area, description, complainDate sql.NullString
+		if err := rows.Scan(&complaintID, &tgMessageID, &waMessageID, &apiID, &consumerName, &village, &belt, &consumerNo, &mobileNo, &address, &area, &description, &complainDate); err != nil {
 			log.Printf("⚠️  Failed to scan row on load: %v", err)
 			continue
 		}
@@ -300,6 +304,9 @@ func (s *Storage) loadFromDB() {
 			}
 			if belt.Valid {
 				s.belts[complaintID.String] = belt.String
+			}
+			if consumerNo.Valid {
+				s.consumerNos[complaintID.String] = consumerNo.String
 			}
 			if mobileNo.Valid {
 				s.mobileNos[complaintID.String] = mobileNo.String
@@ -455,6 +462,13 @@ func (s *Storage) GetBelt(complaintID string) string {
 	return s.belts[complaintID]
 }
 
+// GetConsumerNo retrieves the cached consumer account number for a complaint.
+func (s *Storage) GetConsumerNo(complaintID string) string {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.consumerNos[complaintID]
+}
+
 // GetMobileNo retrieves the cached mobile number for a complaint.
 func (s *Storage) GetMobileNo(complaintID string) string {
 	s.mu.RLock()
@@ -496,7 +510,7 @@ func (s *Storage) GetComplainDate(complaintID string) string {
 // change (or whose details were not captured during their original scrape).
 // All fields are written atomically; the in-memory cache is only updated
 // after the DB write succeeds so memory never gets ahead of disk.
-func (s *Storage) SetDetails(complaintID, mobileNo, address, area, description, complainDate string) error {
+func (s *Storage) SetDetails(complaintID, consumerNo, mobileNo, address, area, description, complainDate string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
@@ -506,12 +520,13 @@ func (s *Storage) SetDetails(complaintID, mobileNo, address, area, description, 
 
 	if _, err := s.db.Exec(`
 		UPDATE complaints
-		SET mobile_no = ?, address = ?, area = ?, description = ?, complain_date = ?
+		SET consumer_no = ?, mobile_no = ?, address = ?, area = ?, description = ?, complain_date = ?
 		WHERE complaint_id = ?
-	`, mobileNo, address, area, description, complainDate, complaintID); err != nil {
+	`, consumerNo, mobileNo, address, area, description, complainDate, complaintID); err != nil {
 		return err
 	}
 
+	s.consumerNos[complaintID] = consumerNo
 	s.mobileNos[complaintID] = mobileNo
 	s.addresses[complaintID] = address
 	s.areas[complaintID] = area
@@ -627,8 +642,8 @@ func (s *Storage) SaveMultiple(records []Record) error {
 	}
 
 	stmt, err := tx.Prepare(`
-		INSERT INTO complaints (complaint_id, tg_message_id, wa_message_id, api_id, consumer_name, village, belt, mobile_no, address, area, description, complain_date)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		INSERT INTO complaints (complaint_id, tg_message_id, wa_message_id, api_id, consumer_name, village, belt, consumer_no, mobile_no, address, area, description, complain_date)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 		ON CONFLICT(complaint_id) DO UPDATE SET
 			tg_message_id = CASE
 				WHEN excluded.tg_message_id != '' THEN excluded.tg_message_id
@@ -653,6 +668,10 @@ func (s *Storage) SaveMultiple(records []Record) error {
 			belt = CASE
 				WHEN excluded.belt != '' THEN excluded.belt
 				ELSE complaints.belt
+			END,
+			consumer_no = CASE
+				WHEN excluded.consumer_no != '' THEN excluded.consumer_no
+				ELSE complaints.consumer_no
 			END,
 			mobile_no = CASE
 				WHEN excluded.mobile_no != '' THEN excluded.mobile_no
@@ -682,7 +701,7 @@ func (s *Storage) SaveMultiple(records []Record) error {
 	defer stmt.Close()
 
 	for _, r := range records {
-		if _, err := stmt.Exec(r.ComplaintID, r.MessageID, r.WAMessageID, r.APIID, r.ConsumerName, r.Village, r.Belt, r.MobileNo, r.Address, r.Area, r.Description, r.ComplainDate); err != nil {
+		if _, err := stmt.Exec(r.ComplaintID, r.MessageID, r.WAMessageID, r.APIID, r.ConsumerName, r.Village, r.Belt, r.ConsumerNo, r.MobileNo, r.Address, r.Area, r.Description, r.ComplainDate); err != nil {
 			tx.Rollback()
 			return err
 		}
@@ -718,6 +737,9 @@ func (s *Storage) SaveMultiple(records []Record) error {
 		}
 		if r.Belt != "" {
 			s.belts[r.ComplaintID] = r.Belt
+		}
+		if r.ConsumerNo != "" {
+			s.consumerNos[r.ComplaintID] = r.ConsumerNo
 		}
 		if r.MobileNo != "" {
 			s.mobileNos[r.ComplaintID] = r.MobileNo

@@ -78,6 +78,7 @@ func buildFromStorage(stor *storage.Storage, complaintID, apiID string) Complain
 	return Complaint{
 		ComplainNo:        complaintID,
 		Name:              stor.GetConsumerName(complaintID),
+		ConsumerNo:        stor.GetConsumerNo(complaintID),
 		MobileNo:          stor.GetMobileNo(complaintID),
 		Address:           stor.GetAddress(complaintID),
 		Area:              stor.GetArea(complaintID),
@@ -97,8 +98,13 @@ func buildFromStorage(stor *storage.Storage, complaintID, apiID string) Complain
 // backfill from the API. ConsumerName alone is not enough — it has been stored
 // since before this change — so we key off ComplainDate, the cheapest field
 // to detect as "never cached".
+//
+// ConsumerNo is also treated as required: it was added to the schema after the
+// other detail fields, so rows scraped in between have details but no consumer
+// number. consumer_no is a core identifier always present in the API response,
+// so this triggers a single backfill per legacy row and won't loop.
 func needsRefetch(c Complaint) bool {
-	return c.ComplainDate == "" && c.Description == "" && c.MobileNo == ""
+	return c.ConsumerNo == "" || (c.ComplainDate == "" && c.Description == "" && c.MobileNo == "")
 }
 
 // backfillDetails fetches missing detail fields for legacy complaints and
@@ -158,13 +164,14 @@ func fetchAndPersistDetail(sc *session.Client, stor *storage.Storage, complaintI
 		return nil, fmt.Errorf("complaintdetail missing in response")
 	}
 
+	consumerNo := safeStr(detail["consumer_no"])
 	mobile := safeStr(detail["mobile_no"])
 	address := safeStr(detail["exact_location"])
 	area := safeStr(detail["area"])
 	desc := safeStr(detail["description"])
 	date := safeStr(detail["complain_date"])
 
-	if err := stor.SetDetails(complaintID, mobile, address, area, desc, date); err != nil {
+	if err := stor.SetDetails(complaintID, consumerNo, mobile, address, area, desc, date); err != nil {
 		// Persistence failure shouldn't fail the dashboard render — log and
 		// continue with the in-memory Complaint we just built.
 		log.Printf("  ⚠️  Failed to persist backfilled details for %s: %v", complaintID, err)
@@ -173,7 +180,7 @@ func fetchAndPersistDetail(sc *session.Client, stor *storage.Storage, complaintI
 	return &Complaint{
 		ComplainNo:        safeStr(detail["complain_no"]),
 		Name:              safeStr(detail["complainant_name"]),
-		ConsumerNo:        safeStr(detail["consumer_no"]),
+		ConsumerNo:        consumerNo,
 		MobileNo:          mobile,
 		Address:           address,
 		Area:              area,
