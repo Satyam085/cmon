@@ -351,6 +351,9 @@ var complaintsPageTemplate = template.Must(template.New("complaints-page").Parse
       color: var(--accent);
     }
     .tool-btn svg { width: 14px; height: 14px; flex-shrink: 0; }
+    /* Icon-only variant — keeps the toolbar compact when there are several
+       actions. Tooltip + aria-label carry the meaning. */
+    .tool-btn.icon-only { padding: 8px; gap: 0; }
     .refresh-btn {
       display: inline-flex;
       align-items: center;
@@ -1337,19 +1340,16 @@ var complaintsPageTemplate = template.Must(template.New("complaints-page").Parse
         <button id="dateClearBtn" class="date-filter-clear" type="button" title="Clear date filter" hidden>&times;</button>
       </div>
 
-      <button id="debugToggle" class="tool-btn" type="button" title="Toggle debug columns (Telegram/WhatsApp IDs)">
+      <button id="debugToggle" class="tool-btn icon-only" type="button" title="Toggle debug columns (Telegram/WhatsApp IDs)" aria-label="Toggle debug columns">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 20h9"/><path d="M16.5 3.5a2.12 2.12 0 013 3L7 19l-4 1 1-4z"/></svg>
-        Debug
       </button>
 
-      <button id="printBtn" class="tool-btn" type="button" title="Print complaints">
+      <button id="printBtn" class="tool-btn icon-only" type="button" title="Print complaints" aria-label="Print complaints">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="6 9 6 2 18 2 18 9"/><path d="M6 18H4a2 2 0 01-2-2v-5a2 2 0 012-2h16a2 2 0 012 2v5a2 2 0 01-2 2h-2"/><rect x="6" y="14" width="12" height="8"/></svg>
-        Print
       </button>
 
-      <button id="exportBtn" class="tool-btn" type="button" title="Export complaints to CSV">
+      <button id="exportBtn" class="tool-btn icon-only" type="button" title="Export complaints to CSV" aria-label="Export complaints to CSV">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
-        Export CSV
       </button>
 
       <button id="refreshBtn" class="refresh-btn" type="button">
