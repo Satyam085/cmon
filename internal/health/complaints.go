@@ -1347,6 +1347,11 @@ var complaintsPageTemplate = template.Must(template.New("complaints-page").Parse
         Print
       </button>
 
+      <button id="exportBtn" class="tool-btn" type="button" title="Export complaints to CSV">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
+        Export CSV
+      </button>
+
       <button id="refreshBtn" class="refresh-btn" type="button">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="23 4 23 10 17 10"/><path d="M20.49 15a9 9 0 11-2.12-9.36L23 10"/></svg>
         <span id="refreshLabel">Refresh</span>
@@ -1461,6 +1466,7 @@ var complaintsPageTemplate = template.Must(template.New("complaints-page").Parse
       const searchCountEl = $("searchCount");
       const debugToggleBtn = $("debugToggle");
       const printBtn = $("printBtn");
+      const exportBtn = $("exportBtn");
       const refreshBtn = $("refreshBtn");
       const refreshLabel = $("refreshLabel");
 
@@ -2205,6 +2211,14 @@ var complaintsPageTemplate = template.Must(template.New("complaints-page").Parse
         });
         const pd = $("printDate"); if (pd) pd.textContent = stamp;
         window.print();
+      });
+
+      // Export CSV — hits the /export.csv endpoint, scoping to the active belt
+      // when one is selected so the download matches what's on screen.
+      exportBtn.addEventListener("click", () => {
+        const u = new URL("/export.csv", location.origin);
+        if (activeBelt) u.searchParams.set("belt", activeBelt);
+        window.location.href = u.toString();
       });
 
       // Keyboard shortcuts
