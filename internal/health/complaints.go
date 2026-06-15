@@ -987,11 +987,15 @@ var complaintsPageTemplate = template.Must(template.New("complaints-page").Parse
         padding: 9px 12px 9px 36px;
       }
       .search-count { width: 100%; order: 5; font-size: 11px; }
-      .tool-btn, .refresh-btn {
-        flex: 1 1 0;
+      /* Icon-only actions stay compact squares; only the labelled Refresh
+         button grows to fill the leftover row space. */
+      .tool-btn { flex: 0 0 auto; margin-left: 0; }
+      .tool-btn.icon-only { padding: 9px; }
+      .refresh-btn {
+        flex: 1 1 auto;
         justify-content: center;
         margin-left: 0;
-        padding: 9px 10px;
+        padding: 9px 14px;
         font-size: 12.5px;
       }
 
@@ -1077,7 +1081,6 @@ var complaintsPageTemplate = template.Must(template.New("complaints-page").Parse
     @media (max-width: 420px) {
       .shell { padding: 10px 10px 28px; }
       .stats-row { grid-template-columns: 1fr; }
-      .tool-btn, .refresh-btn { flex: 1 1 100%; }
       .stat-value { font-size: 20px; }
       td { grid-template-columns: 70px minmax(0, 1fr); column-gap: 8px; }
     }
