@@ -1489,6 +1489,24 @@ var complaintsPageTemplate = template.Must(template.New("complaints-page").Parse
       let lastLoadTime = null;
       let agoTimer = null;
 
+      // API IDs resolved from this session. The server keeps serving these
+      // until the next scrape drops them, so we prune them from every fetched
+      // payload to stop just-resolved rows from reappearing after the
+      // "resolved" WebSocket broadcast triggers a silent reload.
+      const resolvedIDs = new Set();
+
+      function pruneResolved(p) {
+        if (!p || !p.groups || resolvedIDs.size === 0) return p;
+        for (const g of p.groups) {
+          g.complaints = g.complaints.filter(c => !resolvedIDs.has(c.api_id || ""));
+          g.count = g.complaints.length;
+        }
+        p.groups = p.groups.filter(g => g.complaints.length > 0);
+        p.total_count = p.groups.reduce((s, g) => s + g.complaints.length, 0);
+        p.group_count = p.groups.length;
+        return p;
+      }
+
       // activeBelt is "" for "all belts" or a canonical belt key (the same key
       // the server uses in groups[].belt). Initialised from the ?belt= query
       // string so a deep-link or refresh preserves the filter.
@@ -2041,6 +2059,10 @@ var complaintsPageTemplate = template.Must(template.New("complaints-page").Parse
           const data = await resp.json().catch(() => ({}));
           if (!resp.ok) throw new Error(data.error || "Status " + resp.status);
 
+          // Remember this ID so it stays pruned from any future reload
+          // (e.g. the "resolved" WebSocket broadcast triggers loadData).
+          resolvedIDs.add(savedAPIID);
+
           // Dim the row and disable the button so it looks resolved
           // immediately. No DOM removal — keeps things stable during
           // rapid-fire resolves.
@@ -2107,7 +2129,7 @@ var complaintsPageTemplate = template.Must(template.New("complaints-page").Parse
           refreshLabel.textContent = "Loading...";
           if (!silent && !scrape) setBanner("info", "<strong>Loading...</strong> Fetching complaint data.");
 
-          payload = await fetchData();
+          payload = pruneResolved(await fetchData());
           lastLoadTime = new Date();
           updateAgo();
           render();
