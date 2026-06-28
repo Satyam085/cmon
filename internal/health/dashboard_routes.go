@@ -7,6 +7,7 @@ package health
 import (
 	"encoding/csv"
 	"encoding/json"
+	"html/template"
 	"log"
 	"net/http"
 	"sort"
@@ -29,9 +30,12 @@ func registerComplaintDashboard(mux *http.ServeMux, monitor *Monitor, sc *sessio
 			return
 		}
 
+		beltsJSON, _ := json.Marshal(belt.All())
+
 		w.Header().Set("Content-Type", "text/html; charset=utf-8")
 		_ = complaintsPageTemplate.Execute(w, complaintDashboardPageData{
-			DataURL: "/data",
+			DataURL:   "/data",
+			BeltsJSON: template.JS(beltsJSON),
 		})
 	})
 
@@ -113,6 +117,53 @@ func registerComplaintDashboard(mux *http.ServeMux, monitor *Monitor, sc *sessio
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusOK)
 		_ = json.NewEncoder(w).Encode(map[string]string{"status": "ok"})
+	})
+
+	// /move — reassign a complaint to a different belt (dashboard equivalent
+	// of the Telegram /move command). Keyed by complaint number, not API ID.
+	mux.HandleFunc("/move", func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost {
+			writeJSONError(w, http.StatusMethodNotAllowed, "method not allowed")
+			return
+		}
+
+		var req struct {
+			ComplaintID string `json:"complaint_id"`
+			Belt        string `json:"belt"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			writeJSONError(w, http.StatusBadRequest, "invalid JSON body")
+			return
+		}
+		if req.ComplaintID == "" {
+			writeJSONError(w, http.StatusBadRequest, "complaint_id is required")
+			return
+		}
+
+		newBelt, ok := belt.Canonicalize(req.Belt)
+		if !ok {
+			writeJSONError(w, http.StatusBadRequest, "unknown belt: "+req.Belt)
+			return
+		}
+		if !stor.Exists(req.ComplaintID) {
+			writeJSONError(w, http.StatusBadRequest, "complaint not in active storage")
+			return
+		}
+
+		if err := stor.UpdateBelt(req.ComplaintID, newBelt); err != nil {
+			log.Printf("⚠️  Dashboard move failed for %s: %v", req.ComplaintID, err)
+			writeJSONError(w, http.StatusBadGateway, err.Error())
+			return
+		}
+
+		log.Printf("🌐 Dashboard: moved complaint %s to belt %s", req.ComplaintID, newBelt)
+		if WSHub != nil {
+			WSHub.BroadcastRefresh()
+		}
+
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		_ = json.NewEncoder(w).Encode(map[string]string{"status": "ok", "belt": newBelt})
 	})
 
 	// /villages returns the village→count breakdown for one belt. Powers the

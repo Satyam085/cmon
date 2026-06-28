@@ -12,6 +12,9 @@ import (
 
 type complaintDashboardPageData struct {
 	DataURL string
+	// BeltsJSON is a JSON array of valid belt display names, injected raw
+	// into the page script so the per-row "Move" dropdown can list targets.
+	BeltsJSON template.JS
 }
 
 type complaintDashboardPayload struct {
@@ -792,6 +795,21 @@ var complaintsPageTemplate = template.Must(template.New("complaints-page").Parse
     .resolve-btn:disabled { opacity: 0.5; cursor: not-allowed; }
     .resolve-btn svg { width: 13px; height: 13px; flex-shrink: 0; }
 
+    /* ── Move dropdown ── */
+    .move-select {
+      margin-left: 6px;
+      padding: 5px 8px;
+      border: 1px solid var(--border);
+      border-radius: var(--r-sm);
+      background: var(--bg-elevated, transparent);
+      font-family: var(--font-sans);
+      font-size: 12px;
+      color: var(--text);
+      cursor: pointer;
+      max-width: 110px;
+    }
+    .move-select:disabled { opacity: 0.5; cursor: not-allowed; }
+
     /* Resolved row — dimmed + non-interactive */
     tr.row-resolved {
       opacity: 0.35;
@@ -1391,6 +1409,7 @@ var complaintsPageTemplate = template.Must(template.New("complaints-page").Parse
   <script>
     (() => {
       const DATA_URL = {{.DataURL}};
+      const BELTS = {{.BeltsJSON}};
       const WS_URL = (location.protocol === "https:" ? "wss://" : "ws://") + location.host + "/ws";
 
       // WebSocket connection
@@ -1676,6 +1695,10 @@ var complaintsPageTemplate = template.Must(template.New("complaints-page").Parse
               'Resolve' +
             '</button>'
           : '<span style="color:var(--text-faint);font-size:11px">—</span>';
+        const moveSelect = '<select class="move-select" data-complaint-no="' + esc(c.complain_no || "") + '" title="Move this complaint to another belt">' +
+          '<option value="">Move…</option>' +
+          BELTS.map((b) => '<option value="' + esc(b) + '">' + esc(b) + '</option>').join("") +
+          '</select>';
         return '<tr>' +
           '<td data-label="Complaint" class="complaint-col mono">' + esc(c.complain_no || "—") + '</td>' +
           '<td data-label="Name">' + esc(c.name || "—") + '</td>' +
@@ -1687,7 +1710,7 @@ var complaintsPageTemplate = template.Must(template.New("complaints-page").Parse
           '<td data-label="Date" class="mono">' + esc(c.complain_date || "—") + '</td>' +
           '<td data-label="Telegram" class="debug-col mono">' + esc(tg) + '</td>' +
           '<td data-label="WhatsApp" class="debug-col mono">' + esc(wa) + '</td>' +
-          '<td data-label="Action" class="action-col">' + resolveBtn + '</td>' +
+          '<td data-label="Action" class="action-col">' + resolveBtn + moveSelect + '</td>' +
         '</tr>';
       }
 
@@ -1889,6 +1912,15 @@ var complaintsPageTemplate = template.Must(template.New("complaints-page").Parse
           });
         });
 
+        // Bind move dropdowns
+        contentEl.querySelectorAll(".move-select").forEach((sel) => {
+          sel.addEventListener("click", (e) => e.stopPropagation());
+          sel.addEventListener("change", (e) => {
+            e.stopPropagation();
+            if (sel.value) moveComplaint(sel.dataset.complaintNo, sel.value, sel);
+          });
+        });
+
         // Bind village drill-down buttons
         contentEl.querySelectorAll(".villages-btn").forEach((btn) => {
           btn.addEventListener("click", (e) => {
@@ -2044,65 +2076,90 @@ var complaintsPageTemplate = template.Must(template.New("complaints-page").Parse
       modalCancelBtn.addEventListener("click", closeResolveModal);
       resolveModal.addEventListener("click", (e) => { if (e.target === resolveModal) closeResolveModal(); });
 
-      modalConfirmBtn.addEventListener("click", async () => {
+      modalConfirmBtn.addEventListener("click", () => {
         if (!_pendingAPIID) return;
         const savedAPIID = _pendingAPIID;
         const savedComplaintNo = _pendingComplaintNo;
         const savedBtn = _pendingBtn;
-        modalConfirmBtn.disabled = true;
-        modalConfirmBtn.innerHTML = '<span class="modal-spinner"></span>Resolving...';
-        modalCancelBtn.disabled = true;
+        const remark = modalRemark.value.trim();
 
+        // Optimistic: dim the row, prune the payload and close the modal
+        // immediately so the UI never blocks on the network round-trip.
+        // Revert if the request fails.
+        resolvedIDs.add(savedAPIID);
+
+        let row = null;
+        if (savedBtn) {
+          row = savedBtn.closest("tr");
+          if (row) row.classList.add("row-resolved");
+          savedBtn.disabled = true;
+          savedBtn.innerHTML = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="20 6 9 17 4 12"/></svg> Resolved';
+        }
+
+        let removed = null; // { group, index, complaint } for revert
+        if (payload && payload.groups) {
+          for (const g of payload.groups) {
+            const idx = g.complaints.findIndex(c => (c.api_id || "") === savedAPIID);
+            if (idx !== -1) {
+              removed = { group: g, index: idx, complaint: g.complaints[idx] };
+              g.complaints.splice(idx, 1);
+              g.count = g.complaints.length;
+              break;
+            }
+          }
+          payload.groups = payload.groups.filter(g => g.complaints.length > 0);
+          payload.total_count = payload.groups.reduce((s, g) => s + g.complaints.length, 0);
+          payload.group_count = payload.groups.length;
+        }
+
+        closeResolveModal();
+        setBanner("success", "<strong>Resolved.</strong> Complaint #" + esc(savedComplaintNo || savedAPIID) + " marked as resolved on the portal.");
+
+        fetch("/resolve", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ complaint_id: savedAPIID, remark })
+        })
+          .then(async (resp) => {
+            const data = await resp.json().catch(() => ({}));
+            if (!resp.ok) throw new Error(data.error || "Status " + resp.status);
+          })
+          .catch((err) => {
+            // Revert the optimistic UI on failure.
+            resolvedIDs.delete(savedAPIID);
+            if (row) row.classList.remove("row-resolved");
+            if (savedBtn) {
+              savedBtn.disabled = false;
+              savedBtn.innerHTML = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="20 6 9 17 4 12"/></svg>Resolve';
+            }
+            if (removed && removed.group.complaints.indexOf(removed.complaint) === -1) {
+              removed.group.complaints.splice(removed.index, 0, removed.complaint);
+              removed.group.count = removed.group.complaints.length;
+            }
+            setBanner("error", "<strong>Resolve failed.</strong> " + esc(err.message) + " — complaint restored.");
+          });
+      });
+
+      // ── Move complaint to another belt ──
+      // On success the server broadcasts a "refresh" over WS, which reloads
+      // the data and re-groups the complaint under its new belt.
+      async function moveComplaint(complaintNo, belt, sel) {
+        sel.disabled = true;
         try {
-          const resp = await fetch("/resolve", {
+          const resp = await fetch("/move", {
             method: "POST",
             headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ complaint_id: savedAPIID, remark: modalRemark.value.trim() })
+            body: JSON.stringify({ complaint_id: complaintNo, belt })
           });
           const data = await resp.json().catch(() => ({}));
           if (!resp.ok) throw new Error(data.error || "Status " + resp.status);
-
-          // Remember this ID so it stays pruned from any future reload
-          // (e.g. the "resolved" WebSocket broadcast triggers loadData).
-          resolvedIDs.add(savedAPIID);
-
-          // Dim the row and disable the button so it looks resolved
-          // immediately. No DOM removal — keeps things stable during
-          // rapid-fire resolves.
-          if (savedBtn) {
-            const row = savedBtn.closest("tr");
-            if (row) row.classList.add("row-resolved");
-            savedBtn.disabled = true;
-            savedBtn.innerHTML = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="20 6 9 17 4 12"/></svg> Resolved';
-          }
-
-          // Silently purge from in-memory payload so the complaint
-          // won't reappear on the next render() / loadData() cycle.
-          if (payload && payload.groups) {
-            for (const g of payload.groups) {
-              const idx = g.complaints.findIndex(c => (c.api_id || "") === savedAPIID);
-              if (idx !== -1) {
-                g.complaints.splice(idx, 1);
-                g.count = g.complaints.length;
-                break;
-              }
-            }
-            payload.groups = payload.groups.filter(g => g.complaints.length > 0);
-            payload.total_count = payload.groups.reduce((s, g) => s + g.complaints.length, 0);
-            payload.group_count = payload.groups.length;
-          }
-
-          closeResolveModal();
-          setBanner("success", "<strong>Resolved.</strong> Complaint #" + esc(savedComplaintNo || savedAPIID) + " marked as resolved on the portal.");
+          setBanner("success", "<strong>Moved.</strong> Complaint #" + esc(complaintNo) + " moved to " + esc(belt) + ".");
         } catch (err) {
-          setBanner("error", "<strong>Resolve failed.</strong> " + esc(err.message));
-          closeResolveModal();
-        } finally {
-          modalConfirmBtn.disabled = false;
-          modalCancelBtn.disabled = false;
-          modalConfirmBtn.innerHTML = "Mark Resolved";
+          setBanner("error", "<strong>Move failed.</strong> " + esc(err.message));
+          sel.disabled = false;
+          sel.value = "";
         }
-      });
+      }
 
       // Fetch
       async function fetchData() {
