@@ -795,9 +795,14 @@ var complaintsPageTemplate = template.Must(template.New("complaints-page").Parse
     .resolve-btn:disabled { opacity: 0.5; cursor: not-allowed; }
     .resolve-btn svg { width: 13px; height: 13px; flex-shrink: 0; }
 
+    /* ── Action cell: stack resolve + move vertically (narrow 9% column) ── */
+    .action-col { display: flex; flex-direction: column; align-items: stretch; }
+
     /* ── Move dropdown ── */
     .move-select {
-      margin-left: 6px;
+      width: 100%;
+      box-sizing: border-box;
+      margin-top: 6px;
       padding: 5px 8px;
       border: 1px solid var(--border);
       border-radius: var(--r-sm);
@@ -806,7 +811,6 @@ var complaintsPageTemplate = template.Must(template.New("complaints-page").Parse
       font-size: 12px;
       color: var(--text);
       cursor: pointer;
-      max-width: 110px;
     }
     .move-select:disabled { opacity: 0.5; cursor: not-allowed; }
 
