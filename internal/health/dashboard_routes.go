@@ -19,7 +19,15 @@ import (
 	"cmon/internal/storage"
 )
 
-func registerComplaintDashboard(mux *http.ServeMux, monitor *Monitor, sc *session.Client, stor *storage.Storage, refreshFn RefreshFunc) {
+func registerComplaintDashboard(
+	mux *http.ServeMux,
+	monitor *Monitor,
+	sc *session.Client,
+	stor *storage.Storage,
+	refreshFn RefreshFunc,
+	resolveFn ResolveCallbackFunc,
+	registerLocalFn RegisterLocalFunc,
+) {
 	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path != "/" {
 			http.NotFound(w, r)
@@ -104,9 +112,15 @@ func registerComplaintDashboard(mux *http.ServeMux, monitor *Monitor, sc *sessio
 		}
 
 		log.Printf("🌐 Dashboard: resolving complaint API ID %s (remark: %q)", req.ComplaintID, remark)
-		if err := api.ResolveComplaint(sc, req.ComplaintID, remark, false); err != nil {
-			log.Printf("⚠️  Dashboard resolve failed for %s: %v", req.ComplaintID, err)
-			writeJSONError(w, http.StatusBadGateway, err.Error())
+		var resolveErr error
+		if resolveFn != nil {
+			resolveErr = resolveFn(req.ComplaintID, remark)
+		} else {
+			resolveErr = api.ResolveComplaint(sc, req.ComplaintID, remark, false)
+		}
+		if resolveErr != nil {
+			log.Printf("⚠️  Dashboard resolve failed for %s: %v", req.ComplaintID, resolveErr)
+			writeJSONError(w, http.StatusBadGateway, resolveErr.Error())
 			return
 		}
 
@@ -285,5 +299,62 @@ func registerComplaintDashboard(mux *http.ServeMux, monitor *Monitor, sc *sessio
 		default:
 			http.NotFound(w, r)
 		}
+	})
+
+	// GET /register — standalone manual registration form page
+	mux.HandleFunc("/register", func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodGet {
+			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+			return
+		}
+
+		beltsJSON, _ := json.Marshal(belt.All())
+
+		w.Header().Set("Content-Type", "text/html; charset=utf-8")
+		_ = registerPageTemplate.Execute(w, map[string]interface{}{
+			"BeltsJSON": template.JS(beltsJSON),
+		})
+	})
+
+	// POST /register-local — JSON endpoint to submit custom local complaint
+	mux.HandleFunc("/register-local", func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost {
+			writeJSONError(w, http.StatusMethodNotAllowed, "method not allowed")
+			return
+		}
+		if registerLocalFn == nil {
+			writeJSONError(w, http.StatusServiceUnavailable, "local registration not available")
+			return
+		}
+
+		var req struct {
+			ComplainantName string `json:"complainant_name"`
+			MobileNo        string `json:"mobile_no"`
+			ConsumerNo      string `json:"consumer_no"`
+			ExactLocation   string `json:"exact_location"`
+			Area            string `json:"area"`
+			Description     string `json:"description"`
+			Belt            string `json:"belt"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			writeJSONError(w, http.StatusBadRequest, "invalid JSON body")
+			return
+		}
+
+		if req.ComplainantName == "" || req.MobileNo == "" {
+			writeJSONError(w, http.StatusBadRequest, "Name and Mobile number are compulsory")
+			return
+		}
+
+		complaintID, err := registerLocalFn(req.ComplainantName, req.MobileNo, req.ConsumerNo, "", req.Belt, req.ExactLocation, req.Area, req.Description)
+		if err != nil {
+			log.Printf("⚠️  Local registration failed: %v", err)
+			writeJSONError(w, http.StatusInternalServerError, err.Error())
+			return
+		}
+
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		_ = json.NewEncoder(w).Encode(map[string]string{"status": "ok", "complaint_id": complaintID})
 	})
 }

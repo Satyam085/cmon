@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log"
+	"strings"
 	"sync"
 	"time"
 
@@ -104,6 +105,10 @@ func buildFromStorage(stor *storage.Storage, complaintID, apiID string) Complain
 // number. consumer_no is a core identifier always present in the API response,
 // so this triggers a single backfill per legacy row and won't loop.
 func needsRefetch(c Complaint) bool {
+	lowerID := strings.ToLower(c.APIID)
+	if strings.HasPrefix(lowerID, "local") || strings.HasPrefix(lowerID, "l-") || strings.HasPrefix(lowerID, "vld") {
+		return false
+	}
 	return c.ConsumerNo == "" || (c.ComplainDate == "" && c.Description == "" && c.MobileNo == "")
 }
 

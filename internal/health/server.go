@@ -168,6 +168,9 @@ type RefreshFunc func() error
 // It is initialized in StartServer and used by the dashboard.
 var WSHub *Hub
 
+type ResolveCallbackFunc func(apiID string, remark string) error
+type RegisterLocalFunc func(consumerName, mobileNo, consumerNo, village, belt, address, area, description string) (string, error)
+
 // StartServer starts the local CMON dashboard server and returns the
 // underlying *http.Server so the caller can drive a graceful Shutdown on
 // process exit. The server itself runs in a background goroutine; this
@@ -179,6 +182,8 @@ var WSHub *Hub
 //   - GET /ws: WebSocket endpoint for real-time updates
 //   - GET /health: JSON health probe
 //   - GET /metrics: Prometheus-compatible metrics
+//   - GET /register: Returns the standalone registration page
+//   - POST /register-local: JSON API endpoint to register custom complaints
 //
 // Parameters:
 //   - monitor: Health monitor to query for status
@@ -186,12 +191,22 @@ var WSHub *Hub
 //   - sc: Authenticated session client used by the complaints dashboard
 //   - stor: Complaint storage used by the complaints dashboard
 //   - refreshFn: Optional function to trigger a scrape cycle before returning data
-func StartServer(monitor *Monitor, port string, sc *session.Client, stor *storage.Storage, refreshFn RefreshFunc) *http.Server {
+//   - resolveFn: Callback to resolve a complaint (supporting custom local ones)
+//   - registerLocalFn: Callback to register a local complaint
+func StartServer(
+	monitor *Monitor,
+	port string,
+	sc *session.Client,
+	stor *storage.Storage,
+	refreshFn RefreshFunc,
+	resolveFn ResolveCallbackFunc,
+	registerLocalFn RegisterLocalFunc,
+) *http.Server {
 	WSHub = NewHub()
 	go WSHub.Run()
 
 	mux := http.NewServeMux()
-	registerComplaintDashboard(mux, monitor, sc, stor, refreshFn)
+	registerComplaintDashboard(mux, monitor, sc, stor, refreshFn, resolveFn, registerLocalFn)
 	registerStatusEndpoints(mux, monitor)
 
 	mux.HandleFunc("/ws", func(w http.ResponseWriter, r *http.Request) {

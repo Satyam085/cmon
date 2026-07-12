@@ -42,7 +42,7 @@ func TestDashboardRoutes(t *testing.T) {
 	})
 
 	mux := http.NewServeMux()
-	registerComplaintDashboard(mux, NewMonitor(), nil, stor, nil)
+	registerComplaintDashboard(mux, NewMonitor(), nil, stor, nil, nil, nil)
 
 	t.Run("root serves dashboard", func(t *testing.T) {
 		req := httptest.NewRequest(http.MethodGet, "/", nil)
@@ -139,7 +139,7 @@ func TestExportJSONReturnsFlatList(t *testing.T) {
 	seedExportFixtures(t, stor)
 
 	mux := http.NewServeMux()
-	registerComplaintDashboard(mux, NewMonitor(), nil, stor, nil)
+	registerComplaintDashboard(mux, NewMonitor(), nil, stor, nil, nil, nil)
 
 	req := httptest.NewRequest(http.MethodGet, "/export.json", nil)
 	rec := httptest.NewRecorder()
@@ -197,7 +197,7 @@ func TestExportJSONFiltersByBeltQueryParam(t *testing.T) {
 	seedExportFixtures(t, stor)
 
 	mux := http.NewServeMux()
-	registerComplaintDashboard(mux, NewMonitor(), nil, stor, nil)
+	registerComplaintDashboard(mux, NewMonitor(), nil, stor, nil, nil, nil)
 
 	// First read /data to learn the canonical belt display name the dashboard
 	// uses — exporting via that same key is the contract we want to lock in.
@@ -265,7 +265,7 @@ func TestVillagesEndpointReturnsBreakdown(t *testing.T) {
 	}
 
 	mux := http.NewServeMux()
-	registerComplaintDashboard(mux, NewMonitor(), nil, stor, nil)
+	registerComplaintDashboard(mux, NewMonitor(), nil, stor, nil, nil, nil)
 
 	req := httptest.NewRequest(http.MethodGet, "/villages?belt=bajipura", nil)
 	rec := httptest.NewRecorder()
@@ -318,7 +318,7 @@ func TestVillagesEndpointAcceptsDisplayName(t *testing.T) {
 	}
 
 	mux := http.NewServeMux()
-	registerComplaintDashboard(mux, NewMonitor(), nil, stor, nil)
+	registerComplaintDashboard(mux, NewMonitor(), nil, stor, nil, nil, nil)
 
 	// The dashboard tabs use the display name, so the URL has to accept that.
 	// belt.Canonicalize lowercases and matches; "Bajipura" should resolve.
@@ -350,7 +350,7 @@ func TestVillagesEndpointMissingBeltIs400(t *testing.T) {
 	t.Cleanup(func() { _ = stor.Close() })
 
 	mux := http.NewServeMux()
-	registerComplaintDashboard(mux, NewMonitor(), nil, stor, nil)
+	registerComplaintDashboard(mux, NewMonitor(), nil, stor, nil, nil, nil)
 
 	req := httptest.NewRequest(http.MethodGet, "/villages", nil)
 	rec := httptest.NewRecorder()
@@ -373,7 +373,7 @@ func TestExportCSVMatchesHeaderAndQuotesCorrectly(t *testing.T) {
 	seedExportFixtures(t, stor)
 
 	mux := http.NewServeMux()
-	registerComplaintDashboard(mux, NewMonitor(), nil, stor, nil)
+	registerComplaintDashboard(mux, NewMonitor(), nil, stor, nil, nil, nil)
 
 	req := httptest.NewRequest(http.MethodGet, "/export.csv", nil)
 	rec := httptest.NewRecorder()
@@ -427,3 +427,76 @@ func TestExportCSVMatchesHeaderAndQuotesCorrectly(t *testing.T) {
 		t.Errorf("description with quotes round-trip: got %q, want %q", bob[8], `TC "burnt"`)
 	}
 }
+
+func TestRegisterLocalEndpoint(t *testing.T) {
+	withTempCWD(t)
+
+	stor, err := storage.New()
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	t.Cleanup(func() {
+		_ = stor.Close()
+	})
+
+	mux := http.NewServeMux()
+
+	called := false
+	var passedName, passedMobile string
+	registerLocalFn := func(name, mobile, consNo, village, belt, addr, area, desc string) (string, error) {
+		called = true
+		passedName = name
+		passedMobile = mobile
+		return "VLD2026071201", nil
+	}
+
+	registerComplaintDashboard(mux, NewMonitor(), nil, stor, nil, nil, registerLocalFn)
+
+	t.Run("POST /register-local success", func(t *testing.T) {
+		body := `{"complainant_name":"John Doe","mobile_no":"1234567890","belt":"Buhari","exact_location":"Test Street","area":"Buhari","description":"No power"}`
+		req := httptest.NewRequest(http.MethodPost, "/register-local", strings.NewReader(body))
+		req.Header.Set("Content-Type", "application/json")
+		rec := httptest.NewRecorder()
+
+		mux.ServeHTTP(rec, req)
+
+		if rec.Code != http.StatusOK {
+			t.Fatalf("POST /register-local returned %d, want %d", rec.Code, http.StatusOK)
+		}
+		if !called {
+			t.Fatal("expected registerLocalFn callback to be invoked")
+		}
+		if passedName != "John Doe" || passedMobile != "1234567890" {
+			t.Errorf("passed unexpected values to callback: name=%q, mobile=%q", passedName, passedMobile)
+		}
+
+		var resp struct {
+			Status      string `json:"status"`
+			ComplaintID string `json:"complaint_id"`
+		}
+		if err := json.NewDecoder(rec.Body).Decode(&resp); err != nil {
+			t.Fatalf("decode response: %v", err)
+		}
+		if resp.Status != "ok" || resp.ComplaintID != "VLD2026071201" {
+			t.Errorf("unexpected response body: %+v", resp)
+		}
+	})
+
+	t.Run("POST /register-local missing name is 400", func(t *testing.T) {
+		called = false
+		body := `{"mobile_no":"1234567890"}`
+		req := httptest.NewRequest(http.MethodPost, "/register-local", strings.NewReader(body))
+		req.Header.Set("Content-Type", "application/json")
+		rec := httptest.NewRecorder()
+
+		mux.ServeHTTP(rec, req)
+
+		if rec.Code != http.StatusBadRequest {
+			t.Fatalf("expected 400 Bad Request, got %d", rec.Code)
+		}
+		if called {
+			t.Fatal("callback should not be invoked when validation fails")
+		}
+	})
+}
+

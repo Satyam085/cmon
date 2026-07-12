@@ -312,3 +312,52 @@ func TestRemoveDeletesPendingResolutions(t *testing.T) {
 	}
 }
 
+func TestGenerateLocalComplaintID(t *testing.T) {
+	withTempCWD(t)
+
+	stor, err := New()
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	t.Cleanup(func() {
+		_ = stor.Close()
+	})
+
+	id1, err := stor.GenerateLocalComplaintID()
+	if err != nil {
+		t.Fatalf("GenerateLocalComplaintID 1: %v", err)
+	}
+
+	// Verify prefix (VLD + YYYYMMDD + SR)
+	if len(id1) < 13 || id1[:3] != "VLD" {
+		t.Errorf("expected VLDYYYYMMDD01 format, got %q", id1)
+	}
+
+	// Save a record with that ID to DB
+	if err := stor.SaveMultiple([]Record{{
+		ComplaintID: id1,
+		APIID:       id1,
+	}}); err != nil {
+		t.Fatalf("save record: %v", err)
+	}
+
+	// Generate next
+	id2, err := stor.GenerateLocalComplaintID()
+	if err != nil {
+		t.Fatalf("GenerateLocalComplaintID 2: %v", err)
+	}
+
+	// It should auto-increment
+	if id2 == id1 {
+		t.Errorf("expected sequence to increment, got same ID %q", id2)
+	}
+
+	// Check suffix incremented by 1
+	suffix1 := id1[len(id1)-2:]
+	suffix2 := id2[len(id2)-2:]
+	if suffix1 == "01" && suffix2 != "02" {
+		t.Errorf("expected sequence to be 02, got %q", suffix2)
+	}
+}
+
+

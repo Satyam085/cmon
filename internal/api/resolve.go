@@ -56,6 +56,12 @@ func SetResolveEndpoint(url string) {
 // Returns:
 //   - error: API call failure or HTTP error, nil on success
 func ResolveComplaint(sc *session.Client, apiID string, remark string, debugMode bool) error {
+	lowerID := strings.ToLower(apiID)
+	if strings.HasPrefix(lowerID, "local") || strings.HasPrefix(lowerID, "l-") || strings.HasPrefix(lowerID, "vld") {
+		log.Printf("  ✓ [LOCAL] Bypassing website resolution for local complaint ID: %s", apiID)
+		return nil
+	}
+
 	apiURL := resolveEndpoint
 
 	formData := url.Values{

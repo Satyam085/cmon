@@ -25,11 +25,13 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"log"
 	"os"
 	"os/signal"
 	"strconv"
+	"strings"
 	"sync"
 	"syscall"
 	"time"
@@ -37,6 +39,7 @@ import (
 
 	"cmon/internal/api"
 	"cmon/internal/auth"
+	"cmon/internal/belt"
 	"cmon/internal/complaint"
 	"cmon/internal/config"
 	"cmon/internal/errors"
@@ -151,10 +154,161 @@ func main() {
 		return fetchWithRetry(deps, true)
 	}
 
+	resolveFn := func(apiID string, remark string) error {
+		lowerAPIID := strings.ToLower(apiID)
+		if strings.HasPrefix(lowerAPIID, "local") || strings.HasPrefix(lowerAPIID, "l-") || strings.HasPrefix(lowerAPIID, "vld") {
+			log.Printf("✅ Resolving local complaint %s...", apiID)
+
+			messageID := stor.GetMessageID(apiID)
+			consumerName := stor.GetConsumerName(apiID)
+			if consumerName == "" {
+				consumerName = "Unknown"
+			}
+
+			resolvedMessage := fmt.Sprintf(
+				"✅ <b>RESOLVED (LOCAL)</b>\n\n"+
+					"Complaint #%s\n"+
+					"👤 %s\n"+
+					"🕐 %s",
+				apiID,
+				consumerName,
+				time.Now().Format("02 Jan 2006, 03:04 PM"),
+			)
+
+			if tg != nil && messageID != "" {
+				if err := tg.EditMessageText(tg.ChatIDForBelt(stor.GetBelt(apiID)), messageID, resolvedMessage); err != nil {
+					log.Printf("⚠️  Failed to edit Telegram message for local complaint %s: %v", apiID, err)
+				}
+			}
+
+			if wa != nil {
+				waResolvedMsg := fmt.Sprintf(
+					"✅ RESOLVED (LOCAL)\n\nComplaint #%s\n👤 %s\n🕐 %s",
+					apiID,
+					consumerName,
+					time.Now().Format("02 Jan 2006, 03:04 PM"),
+				)
+				if waErr := wa.SendMessage(waResolvedMsg); waErr != nil {
+					log.Printf("⚠️  Failed to send WhatsApp resolved notice: %v", waErr)
+				}
+			}
+
+			if err := stor.Remove(apiID); err != nil {
+				return fmt.Errorf("failed to remove local complaint from storage: %w", err)
+			}
+			return nil
+		}
+
+		return api.ResolveComplaint(sc, apiID, remark, cfg.DebugMode)
+	}
+
+	registerLocalFn := func(complainantName, mobileNo, consumerNo, village, beltName, address, area, description string) (string, error) {
+		// Generate custom VLDYYYYMMDDSR ID
+		complaintID, err := stor.GenerateLocalComplaintID()
+		if err != nil {
+			return "", fmt.Errorf("failed to generate complaint ID: %w", err)
+		}
+		complainDate := time.Now().Format("02/01/2006 15:04:05")
+
+		// Handle Auto Assign belt
+		var canonicalBelt string
+		if beltName == "" || strings.ToLower(beltName) == "auto" {
+			resolved := belt.Resolve(area, address, description)
+			canonicalBelt = resolved.Belt
+			village = resolved.Village
+		} else {
+			var ok bool
+			canonicalBelt, ok = belt.Canonicalize(beltName)
+			if !ok {
+				canonicalBelt = "Unknown"
+			}
+			// Attempt to resolve village
+			resolved := belt.Resolve(area, address, description)
+			if resolved.Belt == canonicalBelt {
+				village = resolved.Village
+			}
+		}
+
+		record := storage.Record{
+			ComplaintID:  complaintID,
+			APIID:        complaintID,
+			ConsumerName: complainantName,
+			Village:      village,
+			Belt:         canonicalBelt,
+			ConsumerNo:   consumerNo,
+			MobileNo:     mobileNo,
+			Address:      address,
+			Area:         area,
+			Description:  description,
+			ComplainDate: complainDate,
+		}
+
+		// Translate details
+		translatedName := record.ConsumerName
+		translatedDesc := record.Description
+		translatedAddr := fmt.Sprintf("%s, %s", record.Address, record.Area)
+
+		if translator != nil {
+			texts := []string{translatedName, translatedDesc, translatedAddr}
+			out, err := translator.BatchTranslateToGujarati(context.Background(), texts)
+			if err == nil {
+				translatedName = out[0]
+				translatedDesc = out[1]
+				translatedAddr = out[2]
+			}
+		}
+
+		gujaratiText := ""
+		if translatedName != "" || translatedDesc != "" || translatedAddr != "" {
+			gujaratiText = fmt.Sprintf("👤 %s\n💬 %s\n📍 %s", translatedName, translatedDesc, translatedAddr)
+		}
+
+		// Persist to DB
+		if err := stor.SaveMultiple([]storage.Record{record}); err != nil {
+			return "", fmt.Errorf("failed to save local complaint: %w", err)
+		}
+		metrics.ComplaintsSeenTotal.Inc()
+
+		// Send Telegram notification
+		details := complaint.Details{
+			ComplainNo:      record.ComplaintID,
+			ConsumerNo:      record.ConsumerNo,
+			ComplainantName: record.ConsumerName,
+			MobileNo:        record.MobileNo,
+			Description:     record.Description,
+			ComplainDate:    record.ComplainDate,
+			ExactLocation:   record.Address,
+			Area:            record.Area,
+			Village:         record.Village,
+			Belt:            record.Belt,
+		}
+		prettyJSON, _ := json.MarshalIndent(details, "  ", "  ")
+
+		if tg != nil {
+			msgID, err := tg.SendComplaintMessage(string(prettyJSON), record.ComplaintID, gujaratiText)
+			if err == nil && msgID != "" {
+				_ = stor.SetMessageID(record.ComplaintID, msgID)
+			}
+		}
+
+		// Send WhatsApp notification
+		if wa != nil {
+			waText := complaint.BuildWhatsAppMessage(details, gujaratiText)
+			_ = wa.SendComplaintMessage(waText, record.ComplaintID, stor)
+		}
+
+		// Refresh Dashboard WebSockets
+		if health.WSHub != nil {
+			health.WSHub.BroadcastRefresh()
+		}
+
+		return complaintID, nil
+	}
+
 	// Step 6: Start health check server in background. Returned *http.Server
 	// is shut down explicitly at the end of main so in-flight requests
 	// (notably /refresh, which holds fetchMu) finish before storage closes.
-	httpServer := health.StartServer(healthMonitor, cfg.HealthCheckPort, sc, stor, refreshFn)
+	httpServer := health.StartServer(healthMonitor, cfg.HealthCheckPort, sc, stor, refreshFn, resolveFn, registerLocalFn)
 
 	// bgWg tracks long-lived background goroutines that must finish before
 	// storage closes. Telegram + WhatsApp handlers can be mid-DB-write when a
@@ -448,6 +602,19 @@ func markResolvedComplaints(stor *storage.Storage, tg *telegram.Client, wa *what
 
 	resolvedCount := 0
 	for _, complaintID := range allSeen {
+		// Skip local complaints from auto-resolution on website sync
+		apiID := stor.GetAPIID(complaintID)
+		lowerID := strings.ToLower(complaintID)
+		lowerAPIID := strings.ToLower(apiID)
+		if strings.HasPrefix(lowerAPIID, "local") || 
+			strings.HasPrefix(lowerAPIID, "l-") || 
+			strings.HasPrefix(lowerAPIID, "vld") ||
+			strings.HasPrefix(lowerID, "local") || 
+			strings.HasPrefix(lowerID, "l-") ||
+			strings.HasPrefix(lowerID, "vld") {
+			continue
+		}
+
 		if !activeIDsMap[complaintID] {
 			log.Printf("✅ Marking complaint %s as resolved", complaintID)
 

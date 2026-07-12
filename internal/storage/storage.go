@@ -921,3 +921,37 @@ func (s *Storage) ensureComplaintColumn(name, typ string) error {
 	}
 	return nil
 }
+
+// GenerateLocalComplaintID generates a local complaint ID in format VLDYYYYMMDDSR.
+// SR starts at 01 each day and increments. Thread-safe via s.mu write lock.
+func (s *Storage) GenerateLocalComplaintID() (string, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	// Indian Standard Time (IST) timezone
+	ist, err := time.LoadLocation("Asia/Kolkata")
+	if err != nil {
+		ist = time.Local
+	}
+	dateStr := time.Now().In(ist).Format("20060102")
+	prefix := "VLD" + dateStr
+
+	var lastID string
+	query := `SELECT complaint_id FROM complaints WHERE complaint_id LIKE ? ORDER BY complaint_id DESC LIMIT 1`
+	err = s.db.QueryRow(query, prefix+"%").Scan(&lastID)
+
+	seq := 1
+	if err == nil {
+		// Found last complaint for today, increment sequence
+		seqStr := strings.TrimPrefix(lastID, prefix)
+		var lastSeq int
+		if _, scanErr := fmt.Sscanf(seqStr, "%d", &lastSeq); scanErr == nil {
+			seq = lastSeq + 1
+		}
+	} else if err != sql.ErrNoRows {
+		return "", err
+	}
+
+	return fmt.Sprintf("%s%02d", prefix, seq), nil
+}
+

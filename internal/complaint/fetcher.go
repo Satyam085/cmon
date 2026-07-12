@@ -266,7 +266,7 @@ func (f *Fetcher) processComplaintsConcurrently(complaints []Link) error {
 			ComplaintID:   res.ComplaintID,
 			ComplaintJSON: string(prettyJSON),
 			GujaratiText:  gujaratiText,
-			WAText:        buildWhatsAppMessage(res.Details, gujaratiText),
+			WAText:        BuildWhatsAppMessage(res.Details, gujaratiText),
 		})
 	}
 
@@ -316,8 +316,8 @@ func (f *Fetcher) processComplaintsConcurrently(complaints []Link) error {
 	return nil
 }
 
-// buildWhatsAppMessage formats complaint details as plain text for WhatsApp.
-func buildWhatsAppMessage(details Details, gujaratiText string) string {
+// BuildWhatsAppMessage formats complaint details as plain text for WhatsApp.
+func BuildWhatsAppMessage(details Details, gujaratiText string) string {
 	str := func(v interface{}) string {
 		if v == nil {
 			return ""

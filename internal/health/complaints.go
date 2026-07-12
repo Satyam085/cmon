@@ -1365,6 +1365,15 @@ var complaintsPageTemplate = template.Must(template.New("complaints-page").Parse
         <button id="dateClearBtn" class="date-filter-clear" type="button" title="Clear date filter" hidden>&times;</button>
       </div>
 
+      <div class="date-filter" title="Filter complaints by source (All, DGVCL Portal, or Local)">
+        <span class="date-filter-label">Source</span>
+        <select id="sourceFilter" style="border: none; background: transparent; font-family: var(--font-sans); font-size: 12.5px; color: var(--text); outline: none; cursor: pointer; font-weight: 500; padding: 2px 4px;">
+          <option value="all">All</option>
+          <option value="dgvcl">DGVCL</option>
+          <option value="local">Local</option>
+        </select>
+      </div>
+
       <button id="debugToggle" class="tool-btn icon-only" type="button" title="Toggle debug columns (Telegram/WhatsApp IDs)" aria-label="Toggle debug columns">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 20h9"/><path d="M16.5 3.5a2.12 2.12 0 013 3L7 19l-4 1 1-4z"/></svg>
       </button>
@@ -1376,6 +1385,11 @@ var complaintsPageTemplate = template.Must(template.New("complaints-page").Parse
       <button id="exportBtn" class="tool-btn icon-only" type="button" title="Export complaints to CSV" aria-label="Export complaints to CSV">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
       </button>
+
+      <a id="registerLocalBtn" href="/register" class="refresh-btn" style="background-color: var(--accent); border-color: var(--accent); color: #fff; text-decoration: none; font-weight: 600;">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
+        <span>Register Local</span>
+      </a>
 
       <button id="refreshBtn" class="refresh-btn" type="button">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="23 4 23 10 17 10"/><path d="M20.49 15a9 9 0 11-2.12-9.36L23 10"/></svg>
@@ -1502,13 +1516,14 @@ var complaintsPageTemplate = template.Must(template.New("complaints-page").Parse
       const statusChip = $("statusChip");
       const updatedAgoEl = $("updatedAgo");
       const distBarWrap = $("distBarWrap");
-      const distBar = $("distBar");
+const distBar = $("distBar");
       const distLegend = $("distLegend");
       const beltTabsEl = $("beltTabs");
       const fromDateEl = $("fromDate");
       const toDateEl = $("toDate");
       const dateClearBtn = $("dateClearBtn");
       const dateFilterEl = document.querySelector(".date-filter");
+      const sourceFilter = $("sourceFilter");
 
       let payload = null;
       let isLoading = false;
@@ -1548,6 +1563,9 @@ var complaintsPageTemplate = template.Must(template.New("complaints-page").Parse
       // Village filter — scoped to the active belt. Cleared when the belt
       // changes because village names are belt-specific.
       let activeVillage = (new URLSearchParams(location.search).get("village") || "").trim();
+
+      // Source filter: 'all' (default), 'dgvcl', or 'local'. Initialised from ?source= URL param.
+      let activeSource = (new URLSearchParams(location.search).get("source") || "all").trim();
 
       // Utils
       const esc = (v) => String(v ?? "").replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;").replace(/"/g,"&quot;").replace(/'/g,"&#39;");
@@ -1825,16 +1843,25 @@ var complaintsPageTemplate = template.Must(template.New("complaints-page").Parse
           .filter((g) => activeBelt === "" || g.belt === activeBelt)
           .map((g) => ({
             ...g,
-            complaints: g.complaints.filter((c) =>
-              matches(c, q) &&
-              dateInRange(c.complain_date, activeFromDate, activeToDate) &&
-              villageMatches(c, activeVillage)
-            ),
+            complaints: g.complaints.filter((c) => {
+              const matched = matches(c, q) &&
+                dateInRange(c.complain_date, activeFromDate, activeToDate) &&
+                villageMatches(c, activeVillage);
+              if (!matched) return false;
+
+              // Filter by source
+              const id = (c.api_id || c.complain_no || "").toLowerCase();
+              const isLocal = id.startsWith("vld") || id.startsWith("local") || id.startsWith("l-");
+              if (activeSource === "dgvcl" && isLocal) return false;
+              if (activeSource === "local" && !isLocal) return false;
+
+              return true;
+            }),
           }))
           .filter((g) => g.complaints.length > 0);
 
         const visCount = filtered.reduce((s, g) => s + g.complaints.length, 0);
-        const anyFilter = !!(q || activeBelt || activeFromDate || activeToDate || activeVillage);
+        const anyFilter = !!(q || activeBelt || activeFromDate || activeToDate || activeVillage || activeSource !== "all");
 
         // Stats
         setMetric("totalCount", anyFilter ? visCount : payload.total_count);
@@ -1852,6 +1879,9 @@ var complaintsPageTemplate = template.Must(template.New("complaints-page").Parse
         if (activeVillage) filterParts.push("Village: " + activeVillage);
         if (activeFromDate || activeToDate) {
           filterParts.push("Date: " + (activeFromDate || "—") + " → " + (activeToDate || "—"));
+        }
+        if (activeSource !== "all") {
+          filterParts.push("Source: " + (activeSource === "local" ? "Local Only" : "DGVCL Only"));
         }
         if (q) filterParts.push("Search: " + q);
         const printFilters = $("printFilters");
@@ -2244,6 +2274,13 @@ var complaintsPageTemplate = template.Must(template.New("complaints-page").Parse
       if (activeFromDate) fromDateEl.value = activeFromDate;
       if (activeToDate) toDateEl.value = activeToDate;
       updateDateFilterChrome();
+
+      // Initialise the source filter dropdown from URL state on boot.
+      if (sourceFilter) {
+        sourceFilter.value = activeSource;
+        const container = sourceFilter.closest(".date-filter");
+        if (container) container.classList.toggle("active", activeSource !== "all");
+      }
 
       function syncDateFilterURL() {
         const u = new URL(location.href);
