@@ -131,7 +131,9 @@ func backfillDetails(sc *session.Client, stor *storage.Storage, pending []pendin
 			defer wg.Done()
 			c, err := fetchAndPersistDetail(sc, stor, complaintID, apiID)
 			if err != nil {
-				log.Printf("  ⚠️  Backfill failed for %s: %v", complaintID, err)
+				log.Printf("  ⚠️  Backfill failed for %s: %v. Falling back to storage values.", complaintID, err)
+				fallback := buildFromStorage(stor, complaintID, apiID)
+				results[idx] = result{c: &fallback, ok: true}
 				return
 			}
 			results[idx] = result{c: c, ok: true}

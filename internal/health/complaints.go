@@ -1623,7 +1623,7 @@ const distBar = $("distBar");
       // Status chip
       function setChip(status) {
         statusChip.className = "status-chip " + (status === "healthy" ? "healthy" : status === "loading" ? "loading" : "unhealthy");
-        statusChip.textContent = status === "healthy" ? "Operational" : status === "loading" ? "Loading" : "Degraded";
+        statusChip.textContent = status === "healthy" ? "Operational" : status === "loading" ? "Loading" : "Offline";
       }
 
       // Banner
@@ -1711,7 +1711,11 @@ const distBar = $("distBar");
         const tg = c.telegram_message_id || "—";
         const wa = c.whatsapp_message_id || "—";
         const apiID = c.api_id || "";
-        const resolveBtn = apiID
+        const isOffline = payload && payload.status && payload.status.status === "unhealthy";
+        const lowerID = apiID.toLowerCase();
+        const isLocal = lowerID.startsWith("local") || lowerID.startsWith("l-") || lowerID.startsWith("vld");
+        const showResolve = apiID && (!isOffline || isLocal);
+        const resolveBtn = showResolve
           ? '<button class="resolve-btn" data-api-id="' + esc(apiID) + '" data-complaint-no="' + esc(c.complain_no || "") + '" title="Mark complaint as resolved on the DGVCL portal">' +
               '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="20 6 9 17 4 12"/></svg>' +
               'Resolve' +
@@ -2230,20 +2234,22 @@ const distBar = $("distBar");
 
           const isHealthy = payload.status.status !== "unhealthy";
           setChip(isHealthy ? "healthy" : "unhealthy");
-          if (!silent) {
-            setBanner(
-              isHealthy ? "success" : "error",
-              isHealthy
-                ? "<strong>Up to date.</strong> Last fetch: " + esc(payload.status.last_fetch_status || "ok") + "."
-                : "<strong>Attention needed.</strong> " + esc(payload.status.last_fetch_status || "Check logs.")
-            );
+          if (isHealthy) {
+            if (!silent) {
+              setBanner(
+                "success",
+                "<strong>Up to date.</strong> Last fetch: " + esc(payload.status.last_fetch_status || "ok") + "."
+              );
+            } else {
+              setBanner(
+                "success",
+                "<strong>Dashboard ready.</strong> " + payload.total_count + " pending complaints loaded."
+              );
+            }
           } else {
-            const isHealthy2 = payload.status.status !== "unhealthy";
             setBanner(
-              isHealthy2 ? "success" : "error",
-              isHealthy2
-                ? "<strong>Dashboard ready.</strong> " + payload.total_count + " pending complaints loaded."
-                : "<strong>Degraded.</strong> " + esc(payload.status.last_fetch_status || "Check logs.")
+              "error",
+              "<strong>⚠️ Scraper Offline / Source Website Down.</strong> Showing cached complaints from local storage. (Last error: " + esc(payload.status.last_fetch_status || "Check logs.") + ")"
             );
           }
         } catch (err) {

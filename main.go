@@ -322,17 +322,27 @@ func main() {
 
 	log.Println("🔐 Logging in...")
 	if err := loginWithRetry(deps); err != nil {
-		log.Fatal("❌ Login failed:", err)
-	}
-	log.Println("✓ Logged in")
-
-	log.Println("📬 Fetching complaints...")
-	if err := triggerFetch(deps, false); err != nil {
-		log.Fatal("❌ Failed initial fetch after all retries:", err)
-	}
-	healthMonitor.UpdateFetchStatus("success")
-	if health.WSHub != nil {
-		health.WSHub.BroadcastRefresh()
+		log.Printf("⚠️  Initial login failed: %v. Continuing to start services...", err)
+		healthMonitor.UpdateFetchStatus(fmt.Sprintf("error: login failed: %v", err))
+		if tg != nil {
+			_ = tg.SendCriticalAlert(
+				"Startup Login Failure",
+				fmt.Sprintf("Unable to log in during startup: %v", err),
+				cfg.MaxLoginRetries,
+			)
+		}
+	} else {
+		log.Println("✓ Logged in")
+		log.Println("📬 Fetching complaints...")
+		if err := triggerFetch(deps, false); err != nil {
+			log.Printf("⚠️  Failed initial fetch: %v. Continuing to start services...", err)
+			healthMonitor.UpdateFetchStatus(fmt.Sprintf("error: initial fetch failed: %v", err))
+		} else {
+			healthMonitor.UpdateFetchStatus("success")
+			if health.WSHub != nil {
+				health.WSHub.BroadcastRefresh()
+			}
+		}
 	}
 
 	log.Printf("⏰ Running — next check in %v\n", cfg.FetchInterval)
@@ -498,7 +508,7 @@ func fetchWithRetry(d *daemonDeps, silent bool) error {
 	metrics.FetchFailuresTotal.Inc()
 	d.healthMonitor.UpdateFetchStatus(fmt.Sprintf("error: %v", lastErr))
 
-	if !silent && d.tg != nil {
+	if !silent && d.tg != nil && d.healthMonitor.GetStatus().ConsecutiveErrors == 1 {
 		log.Println("🚨 Sending critical failure alert...")
 		alertErr := d.tg.SendCriticalAlert(
 			"Fetch/Login Failure",

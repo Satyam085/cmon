@@ -103,6 +103,15 @@ func resolve(area, loc, desc string) scoredEntry {
 
 	// Step 1: strong area match (non-Valod).
 	if match, ok := resolveStrongArea(normArea); ok {
+		if _, isBelt := Canonicalize(match.Village); isBelt {
+			if locMatch, ok := resolveBest(loc, false); ok && locMatch.Village != match.Village {
+				lowerLoc := strings.ToLower(strings.TrimSpace(loc))
+				isNear := strings.HasPrefix(lowerLoc, "near") || strings.HasPrefix(lowerLoc, "nr") || strings.Contains(lowerLoc, " near ") || strings.Contains(lowerLoc, " nr ")
+				if !isNear {
+					return locMatch
+				}
+			}
+		}
 		return match
 	}
 
