@@ -320,30 +320,33 @@ func main() {
 	defer callbackCancel()
 	defer waCancel()
 
-	log.Println("🔐 Logging in...")
-	if err := loginWithRetry(deps); err != nil {
-		log.Printf("⚠️  Initial login failed: %v. Continuing to start services...", err)
-		healthMonitor.UpdateFetchStatus(fmt.Sprintf("error: login failed: %v", err))
-		if tg != nil {
-			_ = tg.SendCriticalAlert(
-				"Startup Login Failure",
-				fmt.Sprintf("Unable to log in during startup: %v", err),
-				cfg.MaxLoginRetries,
-			)
-		}
-	} else {
-		log.Println("✓ Logged in")
-		log.Println("📬 Fetching complaints...")
-		if err := triggerFetch(deps, false); err != nil {
-			log.Printf("⚠️  Failed initial fetch: %v. Continuing to start services...", err)
-			healthMonitor.UpdateFetchStatus(fmt.Sprintf("error: initial fetch failed: %v", err))
+	// Run initial login and fetch in a background goroutine so startup is instant and non-blocking
+	go func() {
+		log.Println("🔐 Logging in...")
+		if err := loginWithRetry(deps); err != nil {
+			log.Printf("⚠️  Initial login failed: %v. Continuing in offline mode.", err)
+			healthMonitor.UpdateFetchStatus(fmt.Sprintf("error: login failed: %v", err))
+			if tg != nil {
+				_ = tg.SendCriticalAlert(
+					"Startup Login Failure",
+					fmt.Sprintf("Unable to log in during startup: %v", err),
+					cfg.MaxLoginRetries,
+				)
+			}
 		} else {
-			healthMonitor.UpdateFetchStatus("success")
-			if health.WSHub != nil {
-				health.WSHub.BroadcastRefresh()
+			log.Println("✓ Logged in")
+			log.Println("📬 Fetching complaints...")
+			if err := triggerFetch(deps, false); err != nil {
+				log.Printf("⚠️  Failed initial fetch: %v. Continuing in offline mode.", err)
+				healthMonitor.UpdateFetchStatus(fmt.Sprintf("error: initial fetch failed: %v", err))
+			} else {
+				healthMonitor.UpdateFetchStatus("success")
+				if health.WSHub != nil {
+					health.WSHub.BroadcastRefresh()
+				}
 			}
 		}
-	}
+	}()
 
 	log.Printf("⏰ Running — next check in %v\n", cfg.FetchInterval)
 	log.Println("═══════════════════════════════════════════════════════════")
