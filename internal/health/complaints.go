@@ -2244,10 +2244,10 @@ const distBar = $("distBar");
           updateAgo();
           render();
 
-          const isHealthy = payload.status.status !== "unhealthy";
-          setChip(isHealthy ? "healthy" : "unhealthy");
+          const status = payload.status.status;
+          setChip(status === "healthy" ? "healthy" : status === "starting" ? "loading" : "unhealthy");
           updateWSStatus(wsConnected);
-          if (isHealthy) {
+          if (status === "healthy") {
             if (!silent) {
               setBanner(
                 "success",
@@ -2259,6 +2259,11 @@ const distBar = $("distBar");
                 "<strong>Dashboard ready.</strong> " + payload.total_count + " pending complaints loaded."
               );
             }
+          } else if (status === "starting") {
+            setBanner(
+              "info",
+              "<strong>Initializing...</strong> Scraper is performing the initial sync with the DGVCL portal."
+            );
           } else {
             setBanner(
               "error",
