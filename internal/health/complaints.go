@@ -1493,8 +1493,20 @@ var complaintsPageTemplate = template.Must(template.New("complaints-page").Parse
         const el = document.getElementById("wsStatus");
         if (!el) return;
         el.style.display = "";
-        el.className = "ws-status " + (connected ? "connected" : "disconnected");
-        el.textContent = connected ? "● Live" : "○ Reconnecting...";
+
+        const isOffline = payload && payload.status && payload.status.status === "unhealthy";
+        if (connected) {
+          if (isOffline) {
+            el.className = "ws-status disconnected";
+            el.textContent = "● Offline (Local)";
+          } else {
+            el.className = "ws-status connected";
+            el.textContent = "● Live";
+          }
+        } else {
+          el.className = "ws-status disconnected";
+          el.textContent = "○ Reconnecting...";
+        }
       }
 
       connectWS();
@@ -2234,6 +2246,7 @@ const distBar = $("distBar");
 
           const isHealthy = payload.status.status !== "unhealthy";
           setChip(isHealthy ? "healthy" : "unhealthy");
+          updateWSStatus(wsConnected);
           if (isHealthy) {
             if (!silent) {
               setBanner(
@@ -2254,6 +2267,7 @@ const distBar = $("distBar");
           }
         } catch (err) {
           setChip("unhealthy");
+          updateWSStatus(wsConnected);
           contentEl.innerHTML = '<div class="error-box"><strong>Failed to load dashboard</strong>' + esc(err.message) + '</div>';
           setBanner("error", "<strong>Load failed.</strong> " + esc(err.message));
           setMetric("totalCount", "—");
