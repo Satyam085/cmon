@@ -1051,6 +1051,23 @@ var complaintsPageTemplate = template.Must(template.New("complaints-page").Parse
         box-shadow: var(--shadow-sm);
       }
       tbody tr:last-child td { border-bottom: 1px solid var(--border); }
+
+      /* Village subheader rows */
+      tbody tr.village-subheader {
+        background: var(--surface-bright);
+        border: 1px solid var(--border-bright);
+        box-shadow: none;
+        padding: 0;
+        margin: 16px 0 8px;
+      }
+      tr.village-subheader td {
+        display: block;
+        border: none !important;
+        padding: 10px 12px !important;
+      }
+      tr.village-subheader td::before {
+        display: none;
+      }
       tr:hover td { background: transparent; }
 
       td {
@@ -1774,10 +1791,10 @@ const distBar = $("distBar");
         let rows = "";
         for (const v of villages) {
           rows += '<tr class="village-subheader" style="cursor:pointer;" onclick="window.toggleVillage(this)">' +
-                    '<td colspan="11" style="background:var(--surface-raised); font-weight:600; padding:8px 12px; border-bottom:1px solid var(--border); color:var(--text-2);">' +
+                    '<td colspan="11" style="background:var(--surface-bright); font-weight:600; padding:12px 16px; border-top:1px solid var(--border-bright); border-bottom:1px solid var(--border-bright); color:var(--text);">' +
                       '<div style="display:flex; align-items:center; gap:8px;">' +
                         '<svg class="v-chevron" viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" style="transition:transform 0.2s;"><polyline points="6 9 12 15 18 9"/></svg>' +
-                        '<span>📍 ' + esc(v) + '</span>' +
+                        '<span>' + esc(v) + '</span>' +
                         '<span style="color:var(--text-faint); font-weight:400; font-size:12px;">(' + byVillage[v].length + ')</span>' +
                       '</div>' +
                     '</td>' +
@@ -1804,13 +1821,13 @@ const distBar = $("distBar");
               '<col style="width:12%">' +
               '<col style="width:9%">' +
               '<col style="width:9%">' +
-              '<col style="width:15%">' +
+              '<col style="width:14%">' +
               '<col style="width:7%">' +
-              '<col style="width:19%">' +
+              '<col style="width:17%">' +
               '<col style="width:9%">' +
               '<col class="debug-col" style="width:7%">' +
               '<col class="debug-col" style="width:7%">' +
-              '<col class="action-col" style="width:9%">' +
+              '<col class="action-col" style="width:12%">' +
             '</colgroup>' +
             '<thead><tr>' +
               '<th class="complaint-col">Complaint</th><th>Name</th><th>Consumer</th><th>Mobile</th>' +

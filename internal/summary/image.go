@@ -839,6 +839,6 @@ func drawVillageHeader(dc *gg.Context, font string, x, y, width float64, village
 
 	dc.LoadFontFace(font, fontSize)
 	dc.SetColor(villageHeaderTextColor)
-	text := fmt.Sprintf("📍 %s (%d)", village, count)
+	text := fmt.Sprintf("%s (%d)", village, count)
 	dc.DrawStringAnchored(text, x+float64(cellPaddingX), y+float64(villageHeaderH)/2, 0, 0.5)
 }
