@@ -84,6 +84,8 @@ func NewClient() *Client {
 		return nil
 	}
 
+	loginPhone := os.Getenv("WHATSAPP_LOGIN_PHONE")
+
 	dbPath := os.Getenv("WHATSAPP_DB_PATH")
 	if dbPath == "" {
 		dbPath = "whatsapp.db"
@@ -111,7 +113,7 @@ func NewClient() *Client {
 		return nil
 	}
 
-	wmClient := whatsmeow.NewClient(deviceStore, waLog.Noop)
+	wmClient := whatsmeow.NewClient(deviceStore, waLog.Stdout("Client", "DEBUG", true))
 
 	c := &Client{
 		wm:           wmClient,
@@ -120,23 +122,45 @@ func NewClient() *Client {
 
 	// Connect to WhatsApp
 	if wmClient.Store.ID == nil {
-		// No session stored → need to pair via QR code
-		log.Println("📱 No WhatsApp session found. Starting QR code pairing...")
-		log.Println("   Scan the QR code below with WhatsApp → Linked Devices → Link a Device")
+		if loginPhone != "" {
+			log.Printf("📱 No WhatsApp session found. Requesting pairing code for %s...", loginPhone)
+			log.Println("   (Tip: Open WhatsApp → Linked Devices → Link a Device → Link with phone number instead)")
+		} else {
+			// No session stored → need to pair via QR code
+			log.Println("📱 No WhatsApp session found. Starting QR code pairing...")
+			log.Println("   Scan the QR code below with WhatsApp → Linked Devices → Link a Device")
+			log.Println("   (Tip: Set WHATSAPP_LOGIN_PHONE to use an 8-character pairing code instead)")
+		}
 
 		qrChan, _ := wmClient.GetQRChannel(context.Background())
 		if err := wmClient.Connect(); err != nil {
-			log.Printf("⚠️  Failed to connect to WhatsApp for QR pairing: %v. WhatsApp disabled.", err)
+			log.Printf("⚠️  Failed to connect to WhatsApp for pairing: %v. WhatsApp disabled.", err)
 			return nil
 		}
 
 		// Block until QR is scanned or pairing times out
+		paired := false
+		codeRequested := false
 		for evt := range qrChan {
 			switch evt.Event {
 			case "code":
-				printQR(evt.Code)
+				if loginPhone != "" {
+					if !codeRequested {
+						code, err := wmClient.PairPhone(context.Background(), loginPhone, true, whatsmeow.PairClientChrome, "Chrome (Linux)")
+						if err != nil {
+							log.Printf("⚠️  Failed to get pairing code: %v. WhatsApp disabled.", err)
+							wmClient.Disconnect()
+							return nil
+						}
+						log.Printf("🔑 *ACTION REQUIRED*: Enter this pairing code in WhatsApp: %s", code)
+						codeRequested = true
+					}
+				} else {
+					printQR(evt.Code)
+				}
 			case "success":
 				log.Println("✓ WhatsApp QR pairing successful!")
+				paired = true
 			case "timeout":
 				log.Println("⚠️  WhatsApp QR pairing timed out. WhatsApp disabled for this run.")
 				wmClient.Disconnect()
@@ -145,7 +169,19 @@ func NewClient() *Client {
 				log.Printf("⚠️  WhatsApp QR pairing error: %v. WhatsApp disabled.", evt.Error)
 				wmClient.Disconnect()
 				return nil
+			default:
+				if strings.HasPrefix(evt.Event, "err-") || evt.Error != nil {
+					log.Printf("⚠️  WhatsApp QR pairing failure (%s): %v. WhatsApp disabled.", evt.Event, evt.Error)
+					wmClient.Disconnect()
+					return nil
+				}
 			}
+		}
+
+		if !paired && wmClient.Store.ID == nil {
+			log.Println("⚠️  WhatsApp QR pairing did not complete successfully. WhatsApp disabled.")
+			wmClient.Disconnect()
+			return nil
 		}
 	} else {
 		// Session exists → reconnect without QR
