@@ -1577,7 +1577,7 @@ const distBar = $("distBar");
       let activeVillage = (new URLSearchParams(location.search).get("village") || "").trim();
 
       // Source filter: 'all' (default), 'dgvcl', or 'local'. Initialised from ?source= URL param.
-      let activeSource = (new URLSearchParams(location.search).get("source") || "all").trim();
+      let activeSource = (new URLSearchParams(location.search).get("source") || "all").trim().toLowerCase();
 
       // Utils
       const esc = (v) => String(v ?? "").replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;").replace(/"/g,"&quot;").replace(/'/g,"&#39;");
@@ -2345,6 +2345,18 @@ const distBar = $("distBar");
         sourceFilter.value = activeSource;
         const container = sourceFilter.closest(".date-filter");
         if (container) container.classList.toggle("active", activeSource !== "all");
+
+        // Bind change event so the dropdown actually works
+        sourceFilter.addEventListener("change", (e) => {
+          activeSource = e.target.value.toLowerCase();
+          const u = new URL(location.href);
+          if (activeSource === "all") u.searchParams.delete("source");
+          else u.searchParams.set("source", activeSource);
+          history.replaceState(null, "", u.toString());
+          
+          if (container) container.classList.toggle("active", activeSource !== "all");
+          render();
+        });
       }
 
       function syncDateFilterURL() {
