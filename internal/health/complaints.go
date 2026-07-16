@@ -1127,7 +1127,7 @@ var complaintsPageTemplate = template.Must(template.New("complaints-page").Parse
       .topbar, .stats-row, .toolbar, .banner, .dist-bar-wrap, .ws-status, .site-footer,
       #resolveModal, .empty-state, .search-count, .search-kbd,
       .debug-col, .action-col,
-      .resolve-btn, .group-chevron { display: none !important; }
+      .resolve-btn, .group-chevron, .v-chevron { display: none !important; }
 
       /* Print header */
       .print-only-header {
@@ -1756,7 +1756,35 @@ const distBar = $("distBar");
       function buildGroup(g, complaints) {
         const key = g.belt;
         const isCollapsed = collapsedBelts.has(key);
-        const rows = complaints.map(buildRow).join("");
+
+        // Group complaints by village
+        const byVillage = {};
+        for (const c of complaints) {
+          const v = (c.village || "Unknown Village").trim();
+          if (!byVillage[v]) byVillage[v] = [];
+          byVillage[v].push(c);
+        }
+
+        // Sort villages by number of complaints (descending), then alphabetically
+        const villages = Object.keys(byVillage).sort((a, b) => {
+          const diff = byVillage[b].length - byVillage[a].length;
+          return diff !== 0 ? diff : a.localeCompare(b);
+        });
+
+        let rows = "";
+        for (const v of villages) {
+          rows += '<tr class="village-subheader" style="cursor:pointer;" onclick="window.toggleVillage(this)">' +
+                    '<td colspan="11" style="background:var(--surface-raised); font-weight:600; padding:8px 12px; border-bottom:1px solid var(--border); color:var(--text-2);">' +
+                      '<div style="display:flex; align-items:center; gap:8px;">' +
+                        '<svg class="v-chevron" viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" style="transition:transform 0.2s;"><polyline points="6 9 12 15 18 9"/></svg>' +
+                        '<span>📍 ' + esc(v) + '</span>' +
+                        '<span style="color:var(--text-faint); font-weight:400; font-size:12px;">(' + byVillage[v].length + ')</span>' +
+                      '</div>' +
+                    '</td>' +
+                  '</tr>';
+          rows += byVillage[v].map(buildRow).join("");
+        }
+
         return '<div class="group' + (isCollapsed ? ' collapsed' : '') + '" data-belt="' + esc(key) + '">' +
           '<div class="group-header" role="button" tabindex="0">' +
             '<div class="group-header-left">' +
@@ -1794,6 +1822,18 @@ const distBar = $("distBar");
           '</table></div></div>' +
         '</div>';
       }
+
+      window.toggleVillage = function(tr) {
+        tr.classList.toggle("collapsed");
+        const isCollapsed = tr.classList.contains("collapsed");
+        const chevron = tr.querySelector(".v-chevron");
+        if (chevron) chevron.style.transform = isCollapsed ? "rotate(-90deg)" : "";
+        let next = tr.nextElementSibling;
+        while (next && !next.classList.contains("village-subheader")) {
+          next.style.display = isCollapsed ? "none" : "";
+          next = next.nextElementSibling;
+        }
+      };
 
       // Main render
       // renderBeltTabs paints the pill row above the groups. Belts are pulled
