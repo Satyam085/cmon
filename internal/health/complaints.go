@@ -774,6 +774,7 @@ var complaintsPageTemplate = template.Must(template.New("complaints-page").Parse
     .resolve-btn {
       display: inline-flex;
       align-items: center;
+      justify-content: center;
       gap: 5px;
       padding: 5px 11px;
       border: 1px solid rgba(21,128,61,0.3);
@@ -795,14 +796,13 @@ var complaintsPageTemplate = template.Must(template.New("complaints-page").Parse
     .resolve-btn:disabled { opacity: 0.5; cursor: not-allowed; }
     .resolve-btn svg { width: 13px; height: 13px; flex-shrink: 0; }
 
-    /* ── Action cell: stack resolve + move vertically (narrow 9% column) ── */
-    .action-col { display: flex; flex-direction: column; align-items: stretch; }
+    /* ── Action cell: stack resolve + move vertically ── */
+    .action-wrapper { display: flex; flex-direction: column; align-items: stretch; gap: 6px; }
 
     /* ── Move dropdown ── */
     .move-select {
       width: 100%;
       box-sizing: border-box;
-      margin-top: 6px;
       padding: 5px 8px;
       border: 1px solid var(--border);
       border-radius: var(--r-sm);
@@ -1106,7 +1106,7 @@ var complaintsPageTemplate = template.Must(template.New("complaints-page").Parse
         border-bottom: none !important;
         display: block !important;
       }
-      .action-col::before { display: none; }
+      .action-wrapper { gap: 6px; }
       .resolve-btn {
         width: 100%;
         justify-content: center;
@@ -1765,7 +1765,7 @@ const distBar = $("distBar");
           '<td data-label="Date" class="mono">' + esc(c.complain_date || "—") + '</td>' +
           '<td data-label="Telegram" class="debug-col mono">' + esc(tg) + '</td>' +
           '<td data-label="WhatsApp" class="debug-col mono">' + esc(wa) + '</td>' +
-          '<td data-label="Action" class="action-col">' + resolveBtn + moveSelect + '</td>' +
+          '<td data-label="Action" class="action-col"><div class="action-wrapper">' + resolveBtn + moveSelect + '</div></td>' +
         '</tr>';
       }
 
