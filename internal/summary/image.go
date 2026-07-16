@@ -109,15 +109,16 @@ const renderScale = 2
 // 26pt logical, doubled). Derive from renderScale so the relationship is
 // visible at a glance and a single edit retunes everything.
 const (
-	cellPaddingX  = 20 * renderScale
-	cellPaddingY  = 16 * renderScale
-	minRowHeight  = 76 * renderScale
-	headerHeight  = 88 * renderScale
-	groupHeaderH  = 64 * renderScale
-	fontSize      = 26 * renderScale
-	headerFontSz  = 26 * renderScale
-	titleFontSz   = 40 * renderScale
-	titlePadding  = 110 * renderScale
+	cellPaddingX   = 20 * renderScale
+	cellPaddingY   = 16 * renderScale
+	minRowHeight   = 76 * renderScale
+	headerHeight   = 88 * renderScale
+	groupHeaderH   = 64 * renderScale
+	villageHeaderH = 50 * renderScale
+	fontSize       = 26 * renderScale
+	headerFontSz   = 26 * renderScale
+	titleFontSz    = 40 * renderScale
+	titlePadding   = 110 * renderScale
 	footerPadding = 80 * renderScale
 	minColWidth   = 110 * renderScale
 	maxAddrWidth  = 360.0 * renderScale
@@ -126,15 +127,17 @@ const (
 
 // Light theme colors
 var (
-	bgColor         = color.RGBA{R: 245, G: 247, B: 250, A: 255} // Light gray bg
-	titleColor      = color.RGBA{R: 30, G: 41, B: 59, A: 255}    // Dark slate
-	headerBgColor   = color.RGBA{R: 37, G: 99, B: 235, A: 255}   // Blue
-	headerTextColor = color.RGBA{R: 255, G: 255, B: 255, A: 255} // White
-	rowEvenColor    = color.RGBA{R: 255, G: 255, B: 255, A: 255} // White
-	rowOddColor     = color.RGBA{R: 241, G: 245, B: 249, A: 255} // Subtle blue-gray
-	textColor       = color.RGBA{R: 30, G: 41, B: 59, A: 255}    // Dark slate
-	borderColor     = color.RGBA{R: 203, G: 213, B: 225, A: 255} // Slate border
-	footerColor     = color.RGBA{R: 100, G: 116, B: 139, A: 255} // Muted slate
+	bgColor                = color.RGBA{R: 245, G: 247, B: 250, A: 255} // Light gray bg
+	titleColor             = color.RGBA{R: 30, G: 41, B: 59, A: 255}    // Dark slate
+	headerBgColor          = color.RGBA{R: 37, G: 99, B: 235, A: 255}   // Blue
+	headerTextColor        = color.RGBA{R: 255, G: 255, B: 255, A: 255} // White
+	villageHeaderBgColor   = color.RGBA{R: 226, G: 232, B: 240, A: 255} // Slate-200
+	villageHeaderTextColor = color.RGBA{R: 71, G: 85, B: 105, A: 255}   // Slate-600
+	rowEvenColor           = color.RGBA{R: 255, G: 255, B: 255, A: 255} // White
+	rowOddColor            = color.RGBA{R: 241, G: 245, B: 249, A: 255} // Subtle blue-gray
+	textColor              = color.RGBA{R: 30, G: 41, B: 59, A: 255}    // Dark slate
+	borderColor            = color.RGBA{R: 203, G: 213, B: 225, A: 255} // Slate border
+	footerColor            = color.RGBA{R: 100, G: 116, B: 139, A: 255} // Muted slate
 )
 
 type complaintGroup struct {
@@ -247,6 +250,14 @@ func wrapText(dc *gg.Context, text string, maxWidth float64) []string {
 	return lines
 }
 
+func getVillage(c Complaint) string {
+	v := strings.TrimSpace(c.Village)
+	if v == "" {
+		return "Unknown Village"
+	}
+	return v
+}
+
 // computeRowHeights calculates the height of each row based on wrapped text.
 func computeRowHeights(dc *gg.Context, complaints []Complaint, colWidths []float64) []float64 {
 	_, lineH := dc.MeasureString("Ay")
@@ -337,7 +348,14 @@ func RenderTable(complaints []Complaint) ([]byte, error) {
 	for i, group := range groups {
 		rowHeightsByGroup[i] = computeRowHeights(tmpDC, group.complaints, colWidths)
 		totalRowHeight += float64(groupHeaderH)
-		for _, h := range rowHeightsByGroup[i] {
+		
+		var lastVillage string
+		for j, h := range rowHeightsByGroup[i] {
+			v := getVillage(group.complaints[j])
+			if j == 0 || v != lastVillage {
+				totalRowHeight += float64(villageHeaderH)
+				lastVillage = v
+			}
 			totalRowHeight += h
 		}
 	}
@@ -397,8 +415,21 @@ func RenderTable(complaints []Complaint) ([]byte, error) {
 		drawGroupHeader(dc, boldFont, tableX, curY, totalWidth, group.belt, len(group.complaints))
 		curY += float64(groupHeaderH)
 
+		vCounts := make(map[string]int)
+		for _, c := range group.complaints {
+			vCounts[getVillage(c)]++
+		}
+
+		var lastVillage string
 		for complaintIdx, c := range group.complaints {
 			c := c
+			v := getVillage(c)
+			if complaintIdx == 0 || v != lastVillage {
+				drawVillageHeader(dc, boldFont, tableX, curY, totalWidth, v, vCounts[v])
+				curY += float64(villageHeaderH)
+				lastVillage = v
+			}
+
 			rh := rowHeightsByGroup[groupIdx][complaintIdx]
 
 			if rowIdx%2 == 0 {
@@ -544,7 +575,13 @@ func RenderBeltTable(beltLabel string, complaints []Complaint) ([]byte, error) {
 
 	rowHeights := computeRowHeights(tmpDC, complaints, colWidths)
 	var totalRowHeight float64
-	for _, h := range rowHeights {
+	var lastVillage string
+	for j, h := range rowHeights {
+		v := getVillage(complaints[j])
+		if j == 0 || v != lastVillage {
+			totalRowHeight += float64(villageHeaderH)
+			lastVillage = v
+		}
 		totalRowHeight += h
 	}
 
@@ -592,8 +629,21 @@ func RenderBeltTable(beltLabel string, complaints []Complaint) ([]byte, error) {
 	lineSpacing := lineH + float64(4*renderScale)
 	curY := tableY + float64(headerHeight)
 
+	vCounts := make(map[string]int)
+	for _, c := range complaints {
+		vCounts[getVillage(c)]++
+	}
+
+	lastVillage = ""
 	for rowIdx, c := range complaints {
 		c := c
+		v := getVillage(c)
+		if rowIdx == 0 || v != lastVillage {
+			drawVillageHeader(dc, boldFont, tableX, curY, totalWidth, v, vCounts[v])
+			curY += float64(villageHeaderH)
+			lastVillage = v
+		}
+
 		rh := rowHeights[rowIdx]
 
 		if rowIdx%2 == 0 {
@@ -673,7 +723,20 @@ func groupComplaints(complaints []Complaint) []complaintGroup {
 
 	groups := make([]complaintGroup, 0, len(grouped))
 	for belt, items := range grouped {
+		vCounts := make(map[string]int)
+		for _, c := range items {
+			vCounts[getVillage(c)]++
+		}
+
 		sort.Slice(items, func(i, j int) bool {
+			vi := getVillage(items[i])
+			vj := getVillage(items[j])
+			if vi != vj {
+				if vCounts[vi] != vCounts[vj] {
+					return vCounts[vi] > vCounts[vj]
+				}
+				return vi < vj
+			}
 			return complaintDateLess(items[i], items[j])
 		})
 		groups = append(groups, complaintGroup{belt: belt, complaints: items})
@@ -762,4 +825,20 @@ func drawGroupHeader(dc *gg.Context, boldFont string, x, y, width float64, beltN
 	dc.SetColor(style.Text)
 	label := fmt.Sprintf("%s Belt  •  %d complaints", style.Label, count)
 	dc.DrawString(label, circleX+float64(20*renderScale), y+float64(groupHeaderH)/2+float64(10*renderScale))
+}
+
+func drawVillageHeader(dc *gg.Context, font string, x, y, width float64, village string, count int) {
+	dc.SetColor(villageHeaderBgColor)
+	dc.DrawRectangle(x, y, width, float64(villageHeaderH))
+	dc.Fill()
+
+	dc.SetColor(borderColor)
+	dc.SetLineWidth(0.5 * renderScale)
+	dc.DrawLine(x, y+float64(villageHeaderH), x+width, y+float64(villageHeaderH))
+	dc.Stroke()
+
+	dc.LoadFontFace(font, fontSize)
+	dc.SetColor(villageHeaderTextColor)
+	text := fmt.Sprintf("📍 %s (%d)", village, count)
+	dc.DrawStringAnchored(text, x+float64(cellPaddingX), y+float64(villageHeaderH)/2, 0, 0.5)
 }
