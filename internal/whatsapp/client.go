@@ -113,7 +113,7 @@ func NewClient() *Client {
 		return nil
 	}
 
-	wmClient := whatsmeow.NewClient(deviceStore, waLog.Stdout("Client", "DEBUG", true))
+	wmClient := whatsmeow.NewClient(deviceStore, waLog.Stdout("Client", "WARN", true))
 
 	c := &Client{
 		wm:           wmClient,
