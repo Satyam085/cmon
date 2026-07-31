@@ -400,65 +400,7 @@ var complaintsPageTemplate = template.Must(template.New("complaints-page").Parse
     .banner-text { color: var(--text-2); flex: 1; }
     .banner-text strong { font-weight: 600; color: var(--text); }
 
-    /* ── Distribution bar ── */
-    .dist-bar-wrap {
-      background: var(--surface);
-      border: 1px solid var(--border);
-      border-radius: var(--r-md);
-      padding: 14px 18px;
-      margin-bottom: 16px;
-      box-shadow: var(--shadow-sm);
-    }
-    .dist-bar-header {
-      display: flex;
-      align-items: center;
-      justify-content: space-between;
-      margin-bottom: 12px;
-    }
-    .dist-bar-title {
-      font-size: 11px;
-      font-weight: 600;
-      text-transform: uppercase;
-      letter-spacing: 0.1em;
-      color: var(--text-dim);
-    }
-    .dist-bar {
-      display: flex;
-      height: 8px;
-      border-radius: var(--r-xs);
-      overflow: hidden;
-      gap: 2px;
-      background: var(--surface-bright);
-    }
-    .dist-seg {
-      border-radius: 2px;
-      min-width: 4px;
-      transition: flex 0.4s ease;
-    }
-    .dist-legend {
-      display: flex;
-      flex-wrap: wrap;
-      gap: 12px 18px;
-      margin-top: 12px;
-    }
-    .dist-legend-item {
-      display: inline-flex;
-      align-items: center;
-      gap: 6px;
-      font-size: 12.5px;
-      color: var(--text-dim);
-    }
-    .dist-legend-dot {
-      width: 8px;
-      height: 8px;
-      border-radius: 50%;
-      flex-shrink: 0;
-    }
-    .dist-legend-count {
-      font-family: var(--font-mono);
-      font-weight: 600;
-      color: var(--text);
-    }
+
 
     /* ── Date range filter ── */
     .date-filter {
@@ -814,6 +756,82 @@ var complaintsPageTemplate = template.Must(template.New("complaints-page").Parse
     }
     .move-select:disabled { opacity: 0.5; cursor: not-allowed; }
 
+    /* ── Click-to-call & Copy Msg controls ── */
+    .tel-link {
+      display: inline-flex;
+      align-items: center;
+      gap: 4px;
+      color: var(--accent);
+      text-decoration: none;
+      font-weight: 500;
+      transition: color 0.15s;
+    }
+    .tel-link:hover {
+      color: var(--accent-hover, #2563eb);
+      text-decoration: underline;
+    }
+    .tel-icon {
+      width: 12px;
+      height: 12px;
+      flex-shrink: 0;
+    }
+    .copy-wa-btn {
+      display: none;
+      align-items: center;
+      justify-content: center;
+      gap: 5px;
+      padding: 5px 11px;
+      border: 1px solid rgba(31,95,232,0.3);
+      border-radius: var(--r-sm);
+      background: var(--accent-soft);
+      font-family: var(--font-sans);
+      font-size: 12px;
+      font-weight: 600;
+      color: var(--accent);
+      cursor: pointer;
+      transition: all 0.15s;
+      white-space: nowrap;
+    }
+    .copy-wa-btn:hover {
+      background: var(--accent);
+      color: #fff;
+      border-color: var(--accent);
+    }
+    .copy-wa-btn svg { width: 13px; height: 13px; flex-shrink: 0; }
+
+    /* ── Toast notifications ── */
+    .toast-container {
+      position: fixed;
+      bottom: 24px;
+      right: 24px;
+      z-index: 10000;
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+      pointer-events: none;
+    }
+    .toast {
+      background: var(--surface-bright);
+      border: 1px solid var(--border-bright);
+      color: var(--text);
+      padding: 10px 16px;
+      border-radius: var(--r-md);
+      font-size: 13px;
+      font-weight: 500;
+      box-shadow: 0 8px 24px rgba(0,0,0,0.18);
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      opacity: 0;
+      transform: translateY(12px);
+      transition: opacity 0.2s cubic-bezier(0.16, 1, 0.3, 1), transform 0.2s cubic-bezier(0.16, 1, 0.3, 1);
+      pointer-events: auto;
+    }
+    .toast.show {
+      opacity: 1;
+      transform: translateY(0);
+    }
+
     /* Resolved row — dimmed + non-interactive */
     tr.row-resolved {
       opacity: 0.35;
@@ -1022,9 +1040,7 @@ var complaintsPageTemplate = template.Must(template.New("complaints-page").Parse
       }
 
       .banner { font-size: 12.5px; padding: 10px 12px; }
-      .dist-bar-wrap { padding: 11px 12px; }
-      .dist-bar-title { font-size: 10px; letter-spacing: 0.08em; }
-      .dist-legend { gap: 6px 12px; font-size: 11.5px; }
+
 
       .group-header { padding: 11px 12px; }
       .group-name { font-size: 13px; }
@@ -1113,6 +1129,13 @@ var complaintsPageTemplate = template.Must(template.New("complaints-page").Parse
         padding: 8px 14px;
         font-size: 13px;
       }
+      .copy-wa-btn {
+        display: inline-flex;
+        width: 100%;
+        justify-content: center;
+        padding: 8px 14px;
+        font-size: 13px;
+      }
       .modal { padding: 20px; border-radius: var(--r-md); }
       .modal-title { font-size: 16px; }
     }
@@ -1141,10 +1164,10 @@ var complaintsPageTemplate = template.Must(template.New("complaints-page").Parse
       .shell { max-width: 100%; padding: 0; margin: 0; }
 
       /* Hide UI chrome */
-      .topbar, .stats-row, .toolbar, .banner, .dist-bar-wrap, .ws-status, .site-footer,
+      .topbar, .stats-row, .toolbar, .banner, .ws-status, .site-footer,
       #resolveModal, .empty-state, .search-count, .search-kbd,
       .debug-col, .action-col,
-      .resolve-btn, .group-chevron, .v-chevron { display: none !important; }
+      .resolve-btn, .copy-wa-btn, .group-chevron, .v-chevron { display: none !important; }
 
       /* Print header */
       .print-only-header {
@@ -1352,15 +1375,6 @@ var complaintsPageTemplate = template.Must(template.New("complaints-page").Parse
       </div>
     </section>
 
-    <!-- Distribution bar -->
-    <section class="dist-bar-wrap" id="distBarWrap" style="display:none">
-      <div class="dist-bar-header">
-        <div class="dist-bar-title">Complaint Distribution</div>
-      </div>
-      <div class="dist-bar" id="distBar"></div>
-      <div class="dist-legend" id="distLegend"></div>
-    </section>
-
     <!-- Belt filter pills -->
     <nav class="belt-tabs" id="beltTabs" role="tablist" aria-label="Filter by belt"></nav>
 
@@ -1544,9 +1558,7 @@ var complaintsPageTemplate = template.Must(template.New("complaints-page").Parse
       const contentEl = $("content");
       const statusChip = $("statusChip");
       const updatedAgoEl = $("updatedAgo");
-      const distBarWrap = $("distBarWrap");
-const distBar = $("distBar");
-      const distLegend = $("distLegend");
+
       const beltTabsEl = $("beltTabs");
       const fromDateEl = $("fromDate");
       const toDateEl = $("toDate");
@@ -1669,25 +1681,7 @@ const distBar = $("distBar");
       // Metrics
       function setMetric(id, val) { const e = $(id); if (e) e.textContent = val; }
 
-      // Distribution bar
-      function renderDistBar(groups) {
-        if (!groups || groups.length === 0) { distBarWrap.style.display = "none"; return; }
-        distBarWrap.style.display = "";
-        const total = groups.reduce((s, g) => s + g.complaints.length, 0);
-        if (total === 0) { distBarWrap.style.display = "none"; return; }
 
-        distBar.innerHTML = groups.map((g) => {
-          const pct = (g.complaints.length / total * 100);
-          return '<div class="dist-seg" style="flex:' + pct + ';background:' + g.text_color + ';opacity:0.85" title="' + esc(g.label) + ': ' + g.complaints.length + '"></div>';
-        }).join("");
-
-        distLegend.innerHTML = groups.map((g) =>
-          '<span class="dist-legend-item">' +
-            '<span class="dist-legend-dot" style="background:' + g.text_color + '"></span>' +
-            esc(g.label) + ' <span class="dist-legend-count">' + g.complaints.length + '</span>' +
-          '</span>'
-        ).join("");
-      }
 
       // Search
       function matches(c, term) {
@@ -1735,6 +1729,72 @@ const distBar = $("distBar");
         });
       }
 
+      function copySvg() {
+        return '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"/><path d="M5 15H4a2 2 0 01-2-2V4a2 2 0 012-2h9a2 2 0 012 2v1"/></svg>';
+      }
+
+      function formatWhatsAppText(c) {
+        const lines = [];
+        lines.push('📋 *Complaint #' + (c.complain_no || '—') + '*');
+        if (c.name && c.name !== '—') lines.push('👤 *Name:* ' + c.name);
+        if (c.consumer_no && c.consumer_no !== '—') lines.push('⚡ *Consumer No:* ' + c.consumer_no);
+        if (c.mobile_no && c.mobile_no !== '—') lines.push('📞 *Mobile:* ' + c.mobile_no);
+
+        const loc = [];
+        if (c.belt) loc.push(c.belt);
+        if (c.village) loc.push(c.village);
+        if (c.area) loc.push(c.area);
+        if (loc.length) lines.push('📍 *Location:* ' + loc.join(' / '));
+
+        if (c.address && c.address !== '—') lines.push('🏠 *Address:* ' + c.address);
+        if (c.description && c.description !== '—') lines.push('📝 *Description:* ' + c.description);
+        if (c.complain_date && c.complain_date !== '—') lines.push('📅 *Date:* ' + c.complain_date);
+
+        return lines.join('\n');
+      }
+
+      function copyToClipboard(text) {
+        if (navigator.clipboard && window.isSecureContext) {
+          return navigator.clipboard.writeText(text);
+        } else {
+          return new Promise((resolve, reject) => {
+            try {
+              const ta = document.createElement("textarea");
+              ta.value = text;
+              ta.style.position = "fixed";
+              ta.style.left = "-9999px";
+              document.body.appendChild(ta);
+              ta.focus();
+              ta.select();
+              const ok = document.execCommand("copy");
+              document.body.removeChild(ta);
+              if (ok) resolve(); else reject(new Error("Copy command failed"));
+            } catch (e) {
+              reject(e);
+            }
+          });
+        }
+      }
+
+      function showToast(msg, icon) {
+        let container = document.getElementById("toastContainer");
+        if (!container) {
+          container = document.createElement("div");
+          container.id = "toastContainer";
+          container.className = "toast-container";
+          document.body.appendChild(container);
+        }
+        const toast = document.createElement("div");
+        toast.className = "toast";
+        toast.innerHTML = '<span>' + (icon || '📋') + '</span><span>' + esc(msg) + '</span>';
+        container.appendChild(toast);
+        requestAnimationFrame(() => toast.classList.add("show"));
+        setTimeout(() => {
+          toast.classList.remove("show");
+          setTimeout(() => toast.remove(), 250);
+        }, 2200);
+      }
+
       // Build table row
       function buildRow(c) {
         const tg = c.telegram_message_id || "—";
@@ -1750,22 +1810,38 @@ const distBar = $("distBar");
               'Resolve' +
             '</button>'
           : '<span style="color:var(--text-faint);font-size:11px">—</span>';
+
+        const copyWaBtn = '<button class="copy-wa-btn" data-wa-text="' + esc(formatWhatsAppText(c)) + '" title="Copy formatted complaint for WhatsApp / messaging">' +
+            '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15a2 2 0 01-2 2H7l-4 4V5a2 2 0 012-2h14a2 2 0 012 2z"/></svg>' +
+            'Copy Msg' +
+          '</button>';
+
         const moveSelect = '<select class="move-select" data-complaint-no="' + esc(c.complain_no || "") + '" title="Move this complaint to another belt">' +
           '<option value="">Move…</option>' +
           BELTS.map((b) => '<option value="' + esc(b) + '">' + esc(b) + '</option>').join("") +
           '</select>';
+
+        const rawMobile = (c.mobile_no && c.mobile_no !== "—") ? c.mobile_no : "";
+        const cleanMobile = rawMobile ? rawMobile.replace(/[^\d+]/g, "") : "";
+        const mobileCell = rawMobile
+          ? '<a href="tel:' + esc(cleanMobile) + '" class="tel-link mono" title="Call ' + esc(rawMobile) + '">' +
+              '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" class="tel-icon"><path d="M22 16.92v3a2 2 0 01-2.18 2 19.79 19.79 0 01-8.63-3.07 19.5 19.5 0 01-6-6 19.79 19.79 0 01-3.07-8.67A2 2 0 014.11 2h3a2 2 0 012 1.72 12.84 12.84 0 00.7 2.81 2 2 0 01-.45 2.11L8.09 9.91a16 16 0 006 6l1.27-1.27a2 2 0 012.11-.45 12.84 12.84 0 002.81.7A2 2 0 0122 16.92z"/></svg>' +
+              '<span>' + esc(rawMobile) + '</span>' +
+            '</a>'
+          : '<span class="mono" style="color:var(--text-faint)">—</span>';
+
         return '<tr>' +
           '<td data-label="Complaint" class="complaint-col mono">' + esc(c.complain_no || "—") + '</td>' +
           '<td data-label="Name">' + esc(c.name || "—") + '</td>' +
           '<td data-label="Consumer" class="mono">' + esc(c.consumer_no || "—") + '</td>' +
-          '<td data-label="Mobile" class="mono">' + esc(c.mobile_no || "—") + '</td>' +
+          '<td data-label="Mobile">' + mobileCell + '</td>' +
           '<td data-label="Address">' + esc(c.address || "—") + '</td>' +
           '<td data-label="Area">' + esc(c.area || "—") + '</td>' +
           '<td data-label="Description" class="desc-cell">' + esc(c.description || "—") + '</td>' +
           '<td data-label="Date" class="mono">' + esc(c.complain_date || "—") + '</td>' +
           '<td data-label="Telegram" class="debug-col mono">' + esc(tg) + '</td>' +
           '<td data-label="WhatsApp" class="debug-col mono">' + esc(wa) + '</td>' +
-          '<td data-label="Action" class="action-col"><div class="action-wrapper">' + resolveBtn + moveSelect + '</div></td>' +
+          '<td data-label="Action" class="action-col"><div class="action-wrapper">' + resolveBtn + copyWaBtn + moveSelect + '</div></td>' +
         '</tr>';
       }
 
@@ -1979,9 +2055,8 @@ const distBar = $("distBar");
           searchKbd.style.display = searchInput === document.activeElement ? "none" : "";
         }
 
-        // Distribution bar + belt-filter tabs (unfiltered — they reflect the
+        // Belt-filter tabs (unfiltered — they reflect the
         // full payload, independent of search and active belt).
-        renderDistBar(payload.groups);
         renderBeltTabs(payload.groups);
         renderVillageFilterChip();
 
@@ -2033,6 +2108,22 @@ const distBar = $("distBar");
           btn.addEventListener("click", (e) => {
             e.stopPropagation(); // don't trigger group collapse
             openVillagesPopover(btn.dataset.beltKey, btn);
+          });
+        });
+
+
+
+        // Bind copy WhatsApp buttons
+        contentEl.querySelectorAll(".copy-wa-btn").forEach((btn) => {
+          btn.addEventListener("click", (e) => {
+            e.stopPropagation();
+            const text = btn.dataset.waText;
+            if (!text) return;
+            copyToClipboard(text).then(() => {
+              showToast("Copied formatted complaint for WhatsApp!", "💬");
+            }).catch((err) => {
+              console.error("Copy failed:", err);
+            });
           });
         });
       }
