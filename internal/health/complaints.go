@@ -1734,21 +1734,29 @@ var complaintsPageTemplate = template.Must(template.New("complaints-page").Parse
       }
 
       function formatWhatsAppText(c) {
+        const beltName = (c.belt || '—').trim();
         const lines = [];
-        lines.push('📋 *Complaint #' + (c.complain_no || '—') + '*');
-        if (c.name && c.name !== '—') lines.push('👤 *Name:* ' + c.name);
-        if (c.consumer_no && c.consumer_no !== '—') lines.push('⚡ *Consumer No:* ' + c.consumer_no);
-        if (c.mobile_no && c.mobile_no !== '—') lines.push('📞 *Mobile:* ' + c.mobile_no);
+        lines.push('📋 Complaint: ' + (c.complain_no || '—'));
+        lines.push('');
+        lines.push('⚡ Belt: ' + beltName);
+        if (c.name && c.name !== '—') lines.push('👤 ' + c.name);
+        if (c.mobile_no && c.mobile_no !== '—') lines.push('📞 ' + c.mobile_no);
+        if (c.consumer_no && c.consumer_no !== '—') lines.push('🆔 Consumer: ' + c.consumer_no);
+        if (c.complain_date && c.complain_date !== '—') lines.push('📅 ' + c.complain_date);
+
+        if (c.description && c.description !== '—') {
+          lines.push('');
+          lines.push('💬 Details:');
+          lines.push(c.description);
+        }
 
         const loc = [];
-        if (c.belt) loc.push(c.belt);
-        if (c.village) loc.push(c.village);
-        if (c.area) loc.push(c.area);
-        if (loc.length) lines.push('📍 *Location:* ' + loc.join(' / '));
-
-        if (c.address && c.address !== '—') lines.push('🏠 *Address:* ' + c.address);
-        if (c.description && c.description !== '—') lines.push('📝 *Description:* ' + c.description);
-        if (c.complain_date && c.complain_date !== '—') lines.push('📅 *Date:* ' + c.complain_date);
+        if (c.village && c.village !== '—') loc.push(c.village);
+        if (c.area && c.area !== '—') loc.push(c.area);
+        if (c.address && c.address !== '—' && !loc.includes(c.address)) loc.push(c.address);
+        if (loc.length) {
+          lines.push('📍 ' + loc.join(', '));
+        }
 
         return lines.join('\n');
       }
