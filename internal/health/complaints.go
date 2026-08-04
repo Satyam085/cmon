@@ -994,16 +994,19 @@ var complaintsPageTemplate = template.Must(template.New("complaints-page").Parse
       .shell { padding: 12px 12px 32px; max-width: 100%; }
 
       .topbar {
-        flex-wrap: wrap;
+        flex-wrap: nowrap;
+        align-items: center;
+        justify-content: space-between;
         gap: 8px;
         padding-bottom: 12px;
         margin-bottom: 14px;
       }
       .logo { font-size: 14px; }
       .status-chip { font-size: 9.5px; padding: 4px 9px; letter-spacing: 0.06em; }
-      .topbar-left { flex: 1 1 auto; min-width: 0; }
+      .topbar-left { display: flex; align-items: center; gap: 8px; flex: 0 1 auto; min-width: 0; }
       .topbar-right {
-        width: 100%;
+        width: auto;
+        flex: 0 0 auto;
         justify-content: flex-end;
         gap: 6px;
       }
@@ -1021,7 +1024,23 @@ var complaintsPageTemplate = template.Must(template.New("complaints-page").Parse
 
       .toolbar { gap: 8px; }
       .search-box { flex: 1 1 100%; min-width: 0; }
-      .date-filter { width: 100%; box-sizing: border-box; }
+      .date-filter {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        width: 100%;
+        box-sizing: border-box;
+      }
+      .date-filter input[type="date"] {
+        flex: 1;
+        min-width: 0;
+        width: 100%;
+      }
+      .date-filter select, #sourceFilter {
+        flex: 1;
+        min-width: 0;
+        width: 100%;
+      }
       .search-box input {
         font-size: 16px;       /* prevents iOS auto-zoom on focus */
         padding: 9px 12px 9px 36px;
@@ -1142,7 +1161,6 @@ var complaintsPageTemplate = template.Must(template.New("complaints-page").Parse
 
     @media (max-width: 420px) {
       .shell { padding: 10px 10px 28px; }
-      .stats-row { grid-template-columns: 1fr; }
       .stat-value { font-size: 20px; }
       td { grid-template-columns: 70px minmax(0, 1fr); column-gap: 8px; }
     }
