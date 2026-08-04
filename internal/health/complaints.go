@@ -2021,10 +2021,10 @@ var complaintsPageTemplate = template.Must(template.New("complaints-page").Parse
         const anyFilter = !!(q || activeBelt || activeFromDate || activeToDate || activeVillage || activeSource !== "all");
 
         // Stats
-        setMetric("totalCount", anyFilter ? visCount : payload.total_count);
-        $("totalSub").textContent = anyFilter ? "of " + payload.total_count + " total" : "complaints";
-        setMetric("groupCount", anyFilter ? filtered.length : payload.group_count);
-        $("groupSub").textContent = anyFilter ? "of " + payload.group_count + " total" : "active belts";
+        setMetric("totalCount", payload.total_count);
+        $("totalSub").textContent = "complaints";
+        setMetric("groupCount", payload.group_count);
+        $("groupSub").textContent = "active belts";
 
         // Print header sync — reflect what's actually on screen so the printed
         // report's totals match its rows. Also render an active-filter summary
