@@ -41,7 +41,7 @@ var entries = []Entry{
 	{Village: "Khanpur", Belt: "Rupvada"},
 	{Village: "Kosambiya", Belt: "Bhimpor"},
 	{Village: "Kumbhiya", Belt: "Bhimpor"},
-	{Village: "Nalotha", Belt: "Bhimpor"},
+	{Village: "Nalotha", Belt: "Kelkui"},
 	{Village: "Nansad", Belt: "Shiker"},
 	{Village: "Pelad Buhari", Belt: "Buhari"},
 	{Village: "Ranveri", Belt: "Bhimpor"},
