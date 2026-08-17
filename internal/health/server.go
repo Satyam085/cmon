@@ -194,6 +194,15 @@ type RegisterLocalFunc func(consumerName, mobileNo, consumerNo, village, belt, a
 //   - refreshFn: Optional function to trigger a scrape cycle before returning data
 //   - resolveFn: Callback to resolve a complaint (supporting custom local ones)
 //   - registerLocalFn: Callback to register a local complaint
+// EnsureHub ensures the global WSHub is initialized and running.
+func EnsureHub() *Hub {
+	if WSHub == nil {
+		WSHub = NewHub()
+		go WSHub.Run()
+	}
+	return WSHub
+}
+
 func StartServer(
 	monitor *Monitor,
 	port string,
@@ -204,8 +213,7 @@ func StartServer(
 	registerLocalFn RegisterLocalFunc,
 	sfmsMon *sfms.Monitor,
 ) *http.Server {
-	WSHub = NewHub()
-	go WSHub.Run()
+	hub := EnsureHub()
 
 	mux := http.NewServeMux()
 	registerComplaintDashboard(mux, monitor, sc, stor, refreshFn, resolveFn, registerLocalFn)
@@ -213,7 +221,7 @@ func StartServer(
 	registerStatusEndpoints(mux, monitor)
 
 	mux.HandleFunc("/ws", func(w http.ResponseWriter, r *http.Request) {
-		WSHub.ServeHTTP(w, r)
+		hub.ServeHTTP(w, r)
 	})
 
 	srv := &http.Server{

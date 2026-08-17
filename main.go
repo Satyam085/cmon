@@ -324,7 +324,7 @@ func main() {
 		sfmsClient := sfms.NewClient(sfmsCfg)
 		sfmsTelemetry = sfms.NewTelemetryClient(sfmsCfg, sfmsClient)
 		sfmsNotifier := sfms.NewNotifier(sfmsCfg, stor, tg, wa)
-		sfmsMon = sfms.NewMonitor(sfmsCfg, sfmsClient, sfmsTelemetry, sfmsNotifier, stor, health.WSHub)
+		sfmsMon = sfms.NewMonitor(sfmsCfg, sfmsClient, sfmsTelemetry, sfmsNotifier, stor, health.EnsureHub())
 
 		// Wire on-demand /feederstatus provider for Telegram & WhatsApp
 		if tg != nil {

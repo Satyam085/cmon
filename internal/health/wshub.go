@@ -165,18 +165,30 @@ type BroadcastMessage struct {
 }
 
 func (h *Hub) BroadcastMessage(msg BroadcastMessage) {
+	if h == nil {
+		return
+	}
 	data, err := json.Marshal(msg)
 	if err != nil {
 		log.Printf("⚠️ Failed to marshal broadcast message: %v", err)
 		return
 	}
-	h.broadcast <- data
+	select {
+	case h.broadcast <- data:
+	default:
+	}
 }
 
 func (h *Hub) BroadcastRefresh() {
+	if h == nil {
+		return
+	}
 	h.BroadcastMessage(BroadcastMessage{Type: "refresh", Action: "fetch_complete"})
 }
 
 func (h *Hub) BroadcastResolved(complaintID string) {
+	if h == nil {
+		return
+	}
 	h.BroadcastMessage(BroadcastMessage{Type: "resolved", ComplaintID: complaintID})
 }

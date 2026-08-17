@@ -118,6 +118,20 @@ func NewMonitor(
 	}
 }
 
+// broadcastRefresh safely sends a refresh message to the WebSocket hub without panicking.
+func (m *Monitor) broadcastRefresh() {
+	if m == nil || m.wsHub == nil {
+		return
+	}
+	defer func() {
+		if r := recover(); r != nil {
+			log.Printf("⚠️  [SFMS] Recovered from wsHub broadcast panic: %v", r)
+		}
+	}()
+	m.wsHub.BroadcastRefresh()
+}
+
+
 // IsFeederInActiveWindow checks if a feeder is currently within its active monitoring schedule.
 func (m *Monitor) IsFeederInActiveWindow(fName string, cat int, t time.Time) (bool, bool, string, string, string) {
 	clean := strings.ToUpper(CleanFeederName(fName))
@@ -442,8 +456,8 @@ func (m *Monitor) EvaluateFeederStates(ctx context.Context, printSummary bool) e
 	}
 
 	// Broadcast refresh to WebSocket clients if state changed or first run
-	if (stateHasChanged || m.isFirstRun) && m.wsHub != nil {
-		m.wsHub.BroadcastRefresh()
+	if (stateHasChanged || m.isFirstRun) {
+		m.broadcastRefresh()
 	}
 
 	if printSummary || len(newInterruptionAlerts) > 0 || len(newRecoveryAlerts) > 0 {
