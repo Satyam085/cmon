@@ -150,6 +150,36 @@ var complaintsPageTemplate = template.Must(template.New("complaints-page").Parse
     }
     .logo span { color: var(--accent); }
 
+    .nav-tabs {
+      display: inline-flex;
+      gap: 4px;
+      background: var(--surface-bright);
+      padding: 3px;
+      border-radius: var(--r-md);
+      border: 1px solid var(--border);
+    }
+    .nav-tab {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      padding: 5px 12px;
+      border-radius: var(--r-sm);
+      text-decoration: none;
+      font-size: 12.5px;
+      font-weight: 600;
+      color: var(--text-dim);
+      transition: all 0.15s ease;
+      white-space: nowrap;
+    }
+    .nav-tab:hover {
+      color: var(--text);
+    }
+    .nav-tab.active {
+      background: var(--surface);
+      color: var(--text);
+      box-shadow: var(--shadow-sm);
+    }
+
     .status-chip {
       display: inline-flex;
       align-items: center;
@@ -994,23 +1024,45 @@ var complaintsPageTemplate = template.Must(template.New("complaints-page").Parse
       .shell { padding: 12px 12px 32px; max-width: 100%; }
 
       .topbar {
-        flex-wrap: nowrap;
+        display: grid;
+        grid-template-columns: 1fr auto;
+        grid-template-areas:
+          "left right"
+          "nav nav";
+        gap: 10px 8px;
         align-items: center;
-        justify-content: space-between;
-        gap: 8px;
-        padding-bottom: 12px;
-        margin-bottom: 14px;
+        padding-bottom: 14px;
+        margin-bottom: 16px;
       }
-      .logo { font-size: 14px; }
-      .status-chip { font-size: 9.5px; padding: 4px 9px; letter-spacing: 0.06em; }
-      .topbar-left { display: flex; align-items: center; gap: 8px; flex: 0 1 auto; min-width: 0; }
+      .topbar-left {
+        grid-area: left;
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        min-width: 0;
+      }
       .topbar-right {
-        width: auto;
-        flex: 0 0 auto;
+        grid-area: right;
+        display: flex;
+        align-items: center;
         justify-content: flex-end;
         gap: 6px;
       }
-      .updated-ago, .ws-status { font-size: 10px; padding: 3px 8px; }
+      .nav-tabs {
+        grid-area: nav;
+        display: flex;
+        width: 100%;
+        box-sizing: border-box;
+      }
+      .nav-tab {
+        flex: 1 1 50%;
+        text-align: center;
+        padding: 7px 8px;
+        font-size: 12px;
+      }
+      .logo { font-size: 15px; }
+      .status-chip { font-size: 9.5px; padding: 3px 8px; letter-spacing: 0.06em; }
+      .updated-ago, .ws-status { font-size: 10px; padding: 3px 6px; }
 
       .stats-row {
         grid-template-columns: 1fr 1fr;
@@ -1371,12 +1423,12 @@ var complaintsPageTemplate = template.Must(template.New("complaints-page").Parse
     <header class="topbar">
       <div class="topbar-left">
         <div class="logo">CMON<span>.</span></div>
-        <div style="display:inline-flex;gap:4px;background:var(--surface-bright);padding:3px;border-radius:6px;">
-          <a href="/" style="padding:4px 10px;border-radius:4px;background:var(--surface);color:var(--text);text-decoration:none;font-size:12px;font-weight:600;box-shadow:var(--shadow-sm);">📋 Complaints</a>
-          <a href="/sfms" style="padding:4px 10px;border-radius:4px;color:var(--text-dim);text-decoration:none;font-size:12px;font-weight:600;">⚡ Feeder Monitor</a>
-        </div>
         <div id="statusChip" class="status-chip loading">Connecting</div>
       </div>
+      <nav class="nav-tabs" aria-label="Page navigation">
+        <a href="/" class="nav-tab active">📋 Complaints</a>
+        <a href="/sfms" class="nav-tab">⚡ Feeder Monitor</a>
+      </nav>
       <div class="topbar-right">
         <span id="wsStatus" class="ws-status" style="display:none"></span>
         <span id="updatedAgo" class="updated-ago"></span>
