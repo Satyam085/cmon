@@ -539,12 +539,21 @@ func (m *Monitor) BuildStatusReportHTML() string {
 	totalDormant := 0
 
 	var ssReports []string
+	validSSCount := 0
 
 	for _, ss := range substations {
+		if len(m.config.FilterSubstations) > 0 && !m.isSubstationFiltered(ss.Name) {
+			continue
+		}
+
 		cleanSS := CleanSubstationName(ss.Name)
 		var lines []string
 
 		for _, f := range ss.FeederInfo {
+			if len(m.config.FilterFeeders) > 0 && !m.isFeederFiltered(f.Name) {
+				continue
+			}
+
 			totalFeeders++
 			cleanF := CleanFeederName(f.Name)
 			isActiveWindow, is24x7, fType, _, _ := m.IsFeederInActiveWindow(f.Name, f.Cat, now)
@@ -578,6 +587,7 @@ func (m *Monitor) BuildStatusReportHTML() string {
 		}
 
 		if len(lines) > 0 {
+			validSSCount++
 			ssBlock := fmt.Sprintf("<b>Substation: %s</b>\n%s", html.EscapeString(cleanSS), strings.Join(lines, "\n"))
 			ssReports = append(ssReports, ssBlock)
 		}
@@ -586,7 +596,7 @@ func (m *Monitor) BuildStatusReportHTML() string {
 	sb.WriteString(fmt.Sprintf(
 		"📊 <b>Summary:</b> %d Substations | %d Feeders\n"+
 			"🟢 <b>Online:</b> %d | 🔴 <b>Interrupted:</b> %d | 🟡 <b>Dormant:</b> %d\n\n",
-		len(substations), totalFeeders, totalOnline, totalInterrupted, totalDormant,
+		validSSCount, totalFeeders, totalOnline, totalInterrupted, totalDormant,
 	))
 
 	sb.WriteString(strings.Join(ssReports, "\n\n"))
@@ -620,12 +630,21 @@ func (m *Monitor) BuildStatusReportText() string {
 	totalDormant := 0
 
 	var ssReports []string
+	validSSCount := 0
 
 	for _, ss := range substations {
+		if len(m.config.FilterSubstations) > 0 && !m.isSubstationFiltered(ss.Name) {
+			continue
+		}
+
 		cleanSS := CleanSubstationName(ss.Name)
 		var lines []string
 
 		for _, f := range ss.FeederInfo {
+			if len(m.config.FilterFeeders) > 0 && !m.isFeederFiltered(f.Name) {
+				continue
+			}
+
 			totalFeeders++
 			cleanF := CleanFeederName(f.Name)
 			isActiveWindow, _, fType, _, _ := m.IsFeederInActiveWindow(f.Name, f.Cat, now)
@@ -658,6 +677,7 @@ func (m *Monitor) BuildStatusReportText() string {
 		}
 
 		if len(lines) > 0 {
+			validSSCount++
 			ssBlock := fmt.Sprintf("Substation: %s\n%s", cleanSS, strings.Join(lines, "\n"))
 			ssReports = append(ssReports, ssBlock)
 		}
@@ -666,7 +686,7 @@ func (m *Monitor) BuildStatusReportText() string {
 	sb.WriteString(fmt.Sprintf(
 		"Summary: %d Substations | %d Feeders\n"+
 			"🟢 Online: %d | 🔴 Interrupted: %d | 🟡 Dormant: %d\n\n",
-		len(substations), totalFeeders, totalOnline, totalInterrupted, totalDormant,
+		validSSCount, totalFeeders, totalOnline, totalInterrupted, totalDormant,
 	))
 
 	sb.WriteString(strings.Join(ssReports, "\n\n"))
@@ -679,13 +699,14 @@ func (m *Monitor) GetDashboardPayload() DashboardPayload {
 	defer m.mu.RUnlock()
 
 	now := NowIST()
-	summary := DashboardSummary{
-		TotalSubstations: len(m.cachedSubstations),
-	}
-
+	summary := DashboardSummary{}
 	var groups []DashboardSubstationGroup
 
 	for _, ss := range m.cachedSubstations {
+		if len(m.config.FilterSubstations) > 0 && !m.isSubstationFiltered(ss.Name) {
+			continue
+		}
+
 		cleanSS := CleanSubstationName(ss.Name)
 		grp := DashboardSubstationGroup{
 			SSID:      ss.SSID,
@@ -695,6 +716,10 @@ func (m *Monitor) GetDashboardPayload() DashboardPayload {
 		}
 
 		for _, f := range ss.FeederInfo {
+			if len(m.config.FilterFeeders) > 0 && !m.isFeederFiltered(f.Name) {
+				continue
+			}
+
 			summary.TotalFeeders++
 			cleanF := CleanFeederName(f.Name)
 			isActiveWindow, is24x7, fType, start, end := m.IsFeederInActiveWindow(f.Name, f.Cat, now)
@@ -765,9 +790,13 @@ func (m *Monitor) GetDashboardPayload() DashboardPayload {
 			})
 		}
 
-		grp.Total = len(grp.Feeders)
-		groups = append(groups, grp)
+		if len(grp.Feeders) > 0 {
+			grp.Total = len(grp.Feeders)
+			groups = append(groups, grp)
+		}
 	}
+
+	summary.TotalSubstations = len(groups)
 
 	sort.Slice(groups, func(i, j int) bool {
 		return groups[i].CleanName < groups[j].CleanName
