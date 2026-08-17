@@ -110,6 +110,8 @@ type Client struct {
 	// routed chat will see the resolution prompt land in the default chat.
 	// Tracked for a follow-up; not gating on this for the routing rollout.
 	BeltRoutes map[string]string
+	// FeederStatusProvider is called by /feederstatus and /sfms commands to fetch live reports.
+	FeederStatusProvider func() string
 	lastReqTime time.Time
 	// httpClient is a persistent client reused across all API calls for
 	// connection pooling — creating a new client per call defeats TCP reuse.
@@ -548,6 +550,37 @@ func (c *Client) SendCriticalAlert(errorType, errorMsg string, retryCount int) e
 	return nil
 }
 
+// SendHTML sends an HTML-formatted message to the default chat ID.
+func (c *Client) SendHTML(text string) error {
+	if c == nil {
+		return nil
+	}
+	return c.SendRawMessage(c.ChatID, text, "HTML")
+}
+
+// SendRawMessage sends a message to a specific chat ID with chosen parse mode.
+func (c *Client) SendRawMessage(chatID, text, parseMode string) error {
+	if c == nil {
+		return nil
+	}
+	if chatID == "" {
+		chatID = c.ChatID
+	}
+	if chatID == "" {
+		return fmt.Errorf("no chat ID configured")
+	}
+
+	msg := Message{
+		ChatID:                chatID,
+		Text:                  text,
+		ParseMode:             parseMode,
+		DisableWebPagePreview: true,
+	}
+
+	_, err := c.doRequest("sendMessage", msg)
+	return err
+}
+
 // EditMessageText edits an existing Telegram message.
 //
 // Use cases:
@@ -972,6 +1005,14 @@ func (c *Client) handleMessage(ctx context.Context, sc *session.Client, message 
 	// Handle /summary command
 	if strings.TrimSpace(message.Text) == "/summary" {
 		c.handleSummaryCommand(ctx, sc, stor)
+		return
+	}
+
+	// Handle /feederstatus and /sfms commands (GETCO SCADA feeder reports)
+	cmdText := strings.ToLower(strings.TrimSpace(message.Text))
+	if cmdText == "/feederstatus" || cmdText == "/sfms" ||
+		strings.HasPrefix(cmdText, "/feederstatus@") || strings.HasPrefix(cmdText, "/sfms@") {
+		c.handleFeederStatusCommand(ctx, message)
 		return
 	}
 

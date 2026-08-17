@@ -148,6 +148,48 @@ func New() (*Storage, error) {
 			prompt_message_id INTEGER,
 			created_at DATETIME DEFAULT CURRENT_TIMESTAMP
 		);
+		CREATE TABLE IF NOT EXISTS sfms_feeders (
+			fid INTEGER PRIMARY KEY,
+			name TEXT,
+			cat INTEGER,
+			cat_name TEXT,
+			is_24x7 INTEGER,
+			schedule_start TEXT,
+			schedule_end TEXT,
+			substation_id INTEGER,
+			substation_name TEXT,
+			bmu_serial_no TEXT,
+			fdr_code TEXT,
+			device TEXT,
+			seq INTEGER,
+			is_active INTEGER,
+			bmu_is_active INTEGER,
+			cbon INTEGER,
+			cboff INTEGER,
+			has_telemetry INTEGER,
+			breaker_status TEXT,
+			is_online INTEGER,
+			interrupted_since DATETIME,
+			updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+		);
+		CREATE TABLE IF NOT EXISTS sfms_events (
+			id INTEGER PRIMARY KEY AUTOINCREMENT,
+			event_type TEXT,
+			fid INTEGER,
+			feeder_name TEXT,
+			substation_name TEXT,
+			category TEXT,
+			fdr_code TEXT,
+			bmu_serial TEXT,
+			downtime TEXT,
+			message TEXT,
+			timestamp DATETIME DEFAULT CURRENT_TIMESTAMP
+		);
+		CREATE TABLE IF NOT EXISTS sfms_config (
+			key TEXT PRIMARY KEY,
+			value TEXT,
+			updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+		);
 	`)
 	if err != nil {
 		log.Fatalf("❌ Failed to create tables: %v", err)
@@ -954,4 +996,288 @@ func (s *Storage) GenerateLocalComplaintID() (string, error) {
 
 	return fmt.Sprintf("%s%02d", prefix, seq), nil
 }
+
+// SFMSFeederRecord represents a persistent snapshot of a monitored feeder in SQLite.
+type SFMSFeederRecord struct {
+	FID              int        `json:"fid"`
+	Name             string     `json:"name"`
+	Category         int        `json:"category"`
+	CategoryName     string     `json:"category_name"`
+	Is24x7           bool       `json:"is_24x7"`
+	ScheduleStart    string     `json:"schedule_start"`
+	ScheduleEnd      string     `json:"schedule_end"`
+	SubstationID     int        `json:"substation_id"`
+	SubstationName   string     `json:"substation_name"`
+	BMUSerialNo      string     `json:"bmu_serial_no"`
+	FdrCode          string     `json:"fdr_code"`
+	Device           string     `json:"device"`
+	Seq              int        `json:"seq"`
+	IsActive         bool       `json:"is_active"`
+	BMUIsActive      bool       `json:"bmu_is_active"`
+	CBON             int        `json:"cbon"`
+	CBOFF            int        `json:"cboff"`
+	HasTelemetry     bool       `json:"has_telemetry"`
+	BreakerStatus    string     `json:"breaker_status"`
+	IsOnline         bool       `json:"is_online"`
+	InterruptedSince *time.Time `json:"interrupted_since,omitempty"`
+	UpdatedAt        time.Time  `json:"updated_at"`
+}
+
+// SFMSEvent represents an outage or recovery audit event.
+type SFMSEvent struct {
+	ID             int64     `json:"id"`
+	EventType      string    `json:"event_type"` // "interruption", "recovery", "auth_error", "auth_restored"
+	FID            int       `json:"fid"`
+	FeederName     string    `json:"feeder_name"`
+	SubstationName string    `json:"substation_name"`
+	Category       string    `json:"category"`
+	FdrCode        string    `json:"fdr_code"`
+	BMUSerial      string    `json:"bmu_serial"`
+	Downtime       string    `json:"downtime,omitempty"`
+	Message        string    `json:"message"`
+	Timestamp      time.Time `json:"timestamp"`
+}
+
+// SaveSFMSFeeders upserts feeder status records into SQLite.
+func (s *Storage) SaveSFMSFeeders(feeders []SFMSFeederRecord) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	tx, err := s.db.Begin()
+	if err != nil {
+		return fmt.Errorf("begin sfms save tx: %w", err)
+	}
+	defer tx.Rollback()
+
+	stmt, err := tx.Prepare(`
+		INSERT INTO sfms_feeders (
+			fid, name, cat, cat_name, is_24x7, schedule_start, schedule_end,
+			substation_id, substation_name, bmu_serial_no, fdr_code, device, seq,
+			is_active, bmu_is_active, cbon, cboff, has_telemetry, breaker_status,
+			is_online, interrupted_since, updated_at
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+		ON CONFLICT(fid) DO UPDATE SET
+			name = excluded.name,
+			cat = excluded.cat,
+			cat_name = excluded.cat_name,
+			is_24x7 = excluded.is_24x7,
+			schedule_start = excluded.schedule_start,
+			schedule_end = excluded.schedule_end,
+			substation_id = excluded.substation_id,
+			substation_name = excluded.substation_name,
+			bmu_serial_no = excluded.bmu_serial_no,
+			fdr_code = excluded.fdr_code,
+			device = excluded.device,
+			seq = excluded.seq,
+			is_active = excluded.is_active,
+			bmu_is_active = excluded.bmu_is_active,
+			cbon = excluded.cbon,
+			cboff = excluded.cboff,
+			has_telemetry = excluded.has_telemetry,
+			breaker_status = excluded.breaker_status,
+			is_online = excluded.is_online,
+			interrupted_since = excluded.interrupted_since,
+			updated_at = CURRENT_TIMESTAMP
+	`)
+	if err != nil {
+		return fmt.Errorf("prepare sfms save stmt: %w", err)
+	}
+	defer stmt.Close()
+
+	for _, f := range feeders {
+		is24x7 := 0
+		if f.Is24x7 {
+			is24x7 = 1
+		}
+		isAct := 0
+		if f.IsActive {
+			isAct = 1
+		}
+		bmuAct := 0
+		if f.BMUIsActive {
+			bmuAct = 1
+		}
+		hasTelem := 0
+		if f.HasTelemetry {
+			hasTelem = 1
+		}
+		isOnline := 0
+		if f.IsOnline {
+			isOnline = 1
+		}
+
+		var intSince *string
+		if f.InterruptedSince != nil {
+			str := f.InterruptedSince.Format("2006-01-02 15:04:05")
+			intSince = &str
+		}
+
+		_, err := stmt.Exec(
+			f.FID, f.Name, f.Category, f.CategoryName, is24x7, f.ScheduleStart, f.ScheduleEnd,
+			f.SubstationID, f.SubstationName, f.BMUSerialNo, f.FdrCode, f.Device, f.Seq,
+			isAct, bmuAct, f.CBON, f.CBOFF, hasTelem, f.BreakerStatus,
+			isOnline, intSince,
+		)
+		if err != nil {
+			return fmt.Errorf("exec sfms save for fid %d: %w", f.FID, err)
+		}
+	}
+
+	return tx.Commit()
+}
+
+// GetSFMSFeeders returns all recorded feeder statuses from SQLite.
+func (s *Storage) GetSFMSFeeders() ([]SFMSFeederRecord, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	rows, err := s.db.Query(`
+		SELECT fid, name, cat, cat_name, is_24x7, schedule_start, schedule_end,
+			substation_id, substation_name, bmu_serial_no, fdr_code, device, seq,
+			is_active, bmu_is_active, cbon, cboff, has_telemetry, breaker_status,
+			is_online, interrupted_since, updated_at
+		FROM sfms_feeders
+		ORDER BY substation_name ASC, name ASC
+	`)
+	if err != nil {
+		return nil, fmt.Errorf("query sfms feeders: %w", err)
+	}
+	defer rows.Close()
+
+	var feeders []SFMSFeederRecord
+	for rows.Next() {
+		var f SFMSFeederRecord
+		var is24x7, isAct, bmuAct, hasTelem, isOnline int
+		var intSinceStr, updatedAtStr sql.NullString
+
+		err := rows.Scan(
+			&f.FID, &f.Name, &f.Category, &f.CategoryName, &is24x7, &f.ScheduleStart, &f.ScheduleEnd,
+			&f.SubstationID, &f.SubstationName, &f.BMUSerialNo, &f.FdrCode, &f.Device, &f.Seq,
+			&isAct, &bmuAct, &f.CBON, &f.CBOFF, &hasTelem, &f.BreakerStatus,
+			&isOnline, &intSinceStr, &updatedAtStr,
+		)
+		if err != nil {
+			return nil, fmt.Errorf("scan sfms feeder: %w", err)
+		}
+
+		f.Is24x7 = is24x7 == 1
+		f.IsActive = isAct == 1
+		f.BMUIsActive = bmuAct == 1
+		f.HasTelemetry = hasTelem == 1
+		f.IsOnline = isOnline == 1
+
+		if intSinceStr.Valid && intSinceStr.String != "" {
+			if t, parseErr := time.Parse("2006-01-02 15:04:05", intSinceStr.String); parseErr == nil {
+				f.InterruptedSince = &t
+			}
+		}
+		if updatedAtStr.Valid && updatedAtStr.String != "" {
+			if t, parseErr := time.Parse("2006-01-02 15:04:05", updatedAtStr.String); parseErr == nil {
+				f.UpdatedAt = t
+			}
+		}
+
+		feeders = append(feeders, f)
+	}
+
+	return feeders, nil
+}
+
+// LogSFMSEvent records an outage, recovery, or system alert event into SQLite.
+func (s *Storage) LogSFMSEvent(event SFMSEvent) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	_, err := s.db.Exec(`
+		INSERT INTO sfms_events (
+			event_type, fid, feeder_name, substation_name, category,
+			fdr_code, bmu_serial, downtime, message, timestamp
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+	`, event.EventType, event.FID, event.FeederName, event.SubstationName, event.Category,
+		event.FdrCode, event.BMUSerial, event.Downtime, event.Message)
+	if err != nil {
+		return fmt.Errorf("log sfms event: %w", err)
+	}
+	return nil
+}
+
+// GetSFMSEvents returns the latest N outage/restoration events from SQLite.
+func (s *Storage) GetSFMSEvents(limit int) ([]SFMSEvent, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	if limit <= 0 {
+		limit = 50
+	}
+
+	rows, err := s.db.Query(`
+		SELECT id, event_type, fid, feeder_name, substation_name, category,
+			fdr_code, bmu_serial, downtime, message, timestamp
+		FROM sfms_events
+		ORDER BY id DESC
+		LIMIT ?
+	`, limit)
+	if err != nil {
+		return nil, fmt.Errorf("query sfms events: %w", err)
+	}
+	defer rows.Close()
+
+	var events []SFMSEvent
+	for rows.Next() {
+		var e SFMSEvent
+		var downtimeStr, tsStr sql.NullString
+		err := rows.Scan(
+			&e.ID, &e.EventType, &e.FID, &e.FeederName, &e.SubstationName, &e.Category,
+			&e.FdrCode, &e.BMUSerial, &downtimeStr, &e.Message, &tsStr,
+		)
+		if err != nil {
+			return nil, fmt.Errorf("scan sfms event: %w", err)
+		}
+		if downtimeStr.Valid {
+			e.Downtime = downtimeStr.String
+		}
+		if tsStr.Valid {
+			if t, parseErr := time.Parse("2006-01-02 15:04:05", tsStr.String); parseErr == nil {
+				e.Timestamp = t
+			}
+		}
+		events = append(events, e)
+	}
+	return events, nil
+}
+
+// SetSFMSToken persists the current Bearer token in SQLite.
+func (s *Storage) SetSFMSToken(token string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	_, err := s.db.Exec(`
+		INSERT INTO sfms_config (key, value, updated_at)
+		VALUES ('bearer_token', ?, CURRENT_TIMESTAMP)
+		ON CONFLICT(key) DO UPDATE SET
+			value = excluded.value,
+			updated_at = CURRENT_TIMESTAMP
+	`, token)
+	if err != nil {
+		return fmt.Errorf("set sfms token: %w", err)
+	}
+	return nil
+}
+
+// GetSFMSToken retrieves the stored Bearer token from SQLite.
+func (s *Storage) GetSFMSToken() (string, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	var token string
+	err := s.db.QueryRow(`SELECT value FROM sfms_config WHERE key = 'bearer_token'`).Scan(&token)
+	if err == sql.ErrNoRows {
+		return "", nil
+	}
+	if err != nil {
+		return "", fmt.Errorf("get sfms token: %w", err)
+	}
+	return token, nil
+}
+
 

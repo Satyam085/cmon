@@ -4,6 +4,7 @@ go 1.25.3
 
 require (
 	github.com/PuerkitoBio/goquery v1.11.0
+	github.com/eclipse/paho.mqtt.golang v1.5.1
 	github.com/fogleman/gg v1.3.0
 	github.com/gorilla/websocket v1.5.3
 	github.com/joho/godotenv v1.5.1

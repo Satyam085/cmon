@@ -47,6 +47,7 @@ import (
 	"cmon/internal/logging"
 	"cmon/internal/metrics"
 	"cmon/internal/session"
+	"cmon/internal/sfms"
 	"cmon/internal/storage"
 	"cmon/internal/telegram"
 	"cmon/internal/translate"
@@ -305,10 +306,49 @@ func main() {
 		return complaintID, nil
 	}
 
+	// Step 5b: Initialize GETCO SFMS Feeder Monitor (optional)
+	var sfmsMon *sfms.Monitor
+	var sfmsTelemetry *sfms.TelemetryClient
+	if cfg.SFMSEnabled {
+		sfmsCfg, err := sfms.LoadConfig(cfg.SFMSConfigPath)
+		if err != nil {
+			log.Printf("⚠️  [SFMS] Failed to load config from %s: %v. Using defaults.", cfg.SFMSConfigPath, err)
+			sfmsCfg, _ = sfms.LoadConfig()
+		}
+
+		// Pull token from SQLite if present
+		if dbToken, err := stor.GetSFMSToken(); err == nil && dbToken != "" {
+			sfmsCfg.BearerToken = sfms.NormalizeBearerToken(dbToken)
+		}
+
+		sfmsClient := sfms.NewClient(sfmsCfg)
+		sfmsTelemetry = sfms.NewTelemetryClient(sfmsCfg, sfmsClient)
+		sfmsNotifier := sfms.NewNotifier(sfmsCfg, stor, tg, wa)
+		sfmsMon = sfms.NewMonitor(sfmsCfg, sfmsClient, sfmsTelemetry, sfmsNotifier, stor, health.WSHub)
+
+		// Wire on-demand /feederstatus provider for Telegram & WhatsApp
+		if tg != nil {
+			tg.FeederStatusProvider = sfmsMon.BuildStatusReportHTML
+		}
+		if wa != nil {
+			wa.FeederStatusProvider = sfmsMon.BuildStatusReportText
+		}
+
+		sfmsTelemetry.SetOnUpdate(func() {
+			sfmsMon.OnTelemetryUpdate(context.Background())
+		})
+
+		if err := sfmsTelemetry.Start(context.Background()); err != nil {
+			log.Printf("⚠️  [SFMS] Telemetry WebSocket init warning: %v", err)
+		}
+
+		log.Println("✓ SFMS Feeder Monitor initialized")
+	}
+
 	// Step 6: Start health check server in background. Returned *http.Server
 	// is shut down explicitly at the end of main so in-flight requests
 	// (notably /refresh, which holds fetchMu) finish before storage closes.
-	httpServer := health.StartServer(healthMonitor, cfg.HealthCheckPort, sc, stor, refreshFn, resolveFn, registerLocalFn)
+	httpServer := health.StartServer(healthMonitor, cfg.HealthCheckPort, sc, stor, refreshFn, resolveFn, registerLocalFn, sfmsMon)
 
 	// bgWg tracks long-lived background goroutines that must finish before
 	// storage closes. Telegram + WhatsApp handlers can be mid-DB-write when a
@@ -364,6 +404,36 @@ func main() {
 		}()
 	}
 
+	// Step 11b: Start SFMS Feeder evaluation loop in background
+	if sfmsMon != nil {
+		bgWg.Add(1)
+		go func() {
+			defer bgWg.Done()
+			log.Println("⚡ [SFMS] Starting initial feeder status evaluation...")
+			if err := sfmsMon.EvaluateFeederStates(shutdownCtx, true); err != nil {
+				log.Printf("⚠️  [SFMS] Initial feeder evaluation notice: %v", err)
+			}
+
+			evalTicker := time.NewTicker(15 * time.Second)
+			defer evalTicker.Stop()
+
+			syncTicker := time.NewTicker(1 * time.Hour)
+			defer syncTicker.Stop()
+
+			for {
+				select {
+				case <-shutdownCtx.Done():
+					log.Println("🛑 SFMS monitor loop stopping...")
+					return
+				case <-evalTicker.C:
+					_ = sfmsMon.EvaluateFeederStates(shutdownCtx, false)
+				case <-syncTicker.C:
+					_ = sfmsMon.SyncMasterData(shutdownCtx)
+				}
+			}
+		}()
+	}
+
 	// Step 12: Periodic fetch ticker — blocks until shutdownCtx fires.
 	runFetchLoop(shutdownCtx, deps)
 
@@ -385,19 +455,24 @@ func main() {
 	callbackCancel()
 	waCancel()
 
-	// 3. Wait for the handler goroutines to actually exit. Telegram long-poll
+	// 3. Stop SFMS real-time telemetry client if connected
+	if sfmsTelemetry != nil {
+		sfmsTelemetry.Stop()
+	}
+
+	// 4. Wait for the handler goroutines to actually exit. Telegram long-poll
 	//    can hang for up to ~30s on its current request; cap the wait so we
 	//    don't block the operator forever on a wedged upstream.
 	if waited := waitWithTimeout(&bgWg, 35*time.Second); !waited {
 		log.Println("⚠️  Background handlers did not exit within 35s; closing storage anyway")
 	}
 
-	// 4. Acquire fetchMu to make sure no scrape (ticker- or dashboard-triggered)
+	// 5. Acquire fetchMu to make sure no scrape (ticker- or dashboard-triggered)
 	//    is still mid-DB-write. Lock — not TryLock — so this blocks until the
 	//    in-flight scrape finishes. Then we hold it until storage closes.
 	fetchMu.Lock()
 
-	// 5. Disconnect WhatsApp + close translator before storage. WhatsApp's own
+	// 6. Disconnect WhatsApp + close translator before storage. WhatsApp's own
 	//    sqlite store is independent of complaint storage, but ordering keeps
 	//    the shutdown log readable.
 	if wa != nil {
@@ -407,7 +482,7 @@ func main() {
 		translator.Close()
 	}
 
-	// 6. Close the complaint database last.
+	// 7. Close the complaint database last.
 	if err := stor.Close(); err != nil {
 		log.Printf("⚠️  Failed to close database: %v", err)
 	}

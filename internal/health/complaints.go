@@ -1371,6 +1371,10 @@ var complaintsPageTemplate = template.Must(template.New("complaints-page").Parse
     <header class="topbar">
       <div class="topbar-left">
         <div class="logo">CMON<span>.</span></div>
+        <div style="display:inline-flex;gap:4px;background:var(--surface-bright);padding:3px;border-radius:6px;">
+          <a href="/" style="padding:4px 10px;border-radius:4px;background:var(--surface);color:var(--text);text-decoration:none;font-size:12px;font-weight:600;box-shadow:var(--shadow-sm);">📋 Complaints</a>
+          <a href="/sfms" style="padding:4px 10px;border-radius:4px;color:var(--text-dim);text-decoration:none;font-size:12px;font-weight:600;">⚡ Feeder Monitor</a>
+        </div>
         <div id="statusChip" class="status-chip loading">Connecting</div>
       </div>
       <div class="topbar-right">

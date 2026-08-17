@@ -5,9 +5,12 @@ package health
 // dashboard_payload.go; export rows in dashboard_export.go.
 
 import (
+	"context"
 	"encoding/csv"
 	"encoding/json"
+	"fmt"
 	"html/template"
+	"io"
 	"log"
 	"net/http"
 	"sort"
@@ -16,6 +19,7 @@ import (
 	"cmon/internal/api"
 	"cmon/internal/belt"
 	"cmon/internal/session"
+	"cmon/internal/sfms"
 	"cmon/internal/storage"
 )
 
@@ -358,3 +362,127 @@ func registerComplaintDashboard(
 		_ = json.NewEncoder(w).Encode(map[string]string{"status": "ok", "complaint_id": complaintID})
 	})
 }
+
+func registerSFMSDashboard(mux *http.ServeMux, sfmsMon *sfms.Monitor) {
+	if sfmsMon == nil {
+		return
+	}
+
+	setCORS := func(w http.ResponseWriter) {
+		w.Header().Set("Access-Control-Allow-Origin", "*")
+		w.Header().Set("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
+		w.Header().Set("Access-Control-Allow-Headers", "Content-Type, Authorization")
+	}
+
+	// GET /sfms — HTML Feeder Status & Alerts Dashboard
+	mux.HandleFunc("/sfms", func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/sfms" && r.URL.Path != "/sfms/" {
+			http.NotFound(w, r)
+			return
+		}
+		if r.Method != http.MethodGet {
+			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+			return
+		}
+
+		w.Header().Set("Content-Type", "text/html; charset=utf-8")
+		_ = sfmsPageTemplate.Execute(w, nil)
+	})
+
+	// GET /sfms/data — JSON API with live feeder states, summary, and outage history
+	mux.HandleFunc("/sfms/data", func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodGet {
+			writeJSONError(w, http.StatusMethodNotAllowed, "method not allowed")
+			return
+		}
+
+		payload := sfmsMon.GetDashboardPayload()
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		_ = json.NewEncoder(w).Encode(payload)
+	})
+
+	// handleUpdateToken handles token renewal and verification
+	handleUpdateToken := func(w http.ResponseWriter, r *http.Request) {
+		setCORS(w)
+		if r.Method == http.MethodOptions {
+			w.WriteHeader(http.StatusOK)
+			return
+		}
+		if r.Method != http.MethodPost {
+			writeJSONError(w, http.StatusMethodNotAllowed, "method not allowed")
+			return
+		}
+
+		body, err := io.ReadAll(r.Body)
+		if err != nil {
+			writeJSONError(w, http.StatusBadRequest, "failed to read request body")
+			return
+		}
+
+		var rawToken string
+		var payload struct {
+			Token       string `json:"token"`
+			AccessToken string `json:"access_token"`
+		}
+		if err := json.Unmarshal(body, &payload); err == nil && (payload.Token != "" || payload.AccessToken != "") {
+			if payload.Token != "" {
+				rawToken = payload.Token
+			} else {
+				rawToken = payload.AccessToken
+			}
+		} else {
+			rawToken = strings.TrimSpace(string(body))
+		}
+
+		if rawToken == "" {
+			writeJSONError(w, http.StatusBadRequest, "token cannot be empty")
+			return
+		}
+
+		count, err := sfmsMon.UpdateTokenAndVerify(r.Context(), rawToken)
+		if err != nil {
+			log.Printf("⚠️  [SFMS] Token update failed: %v", err)
+			writeJSONError(w, http.StatusBadRequest, err.Error())
+			return
+		}
+
+		log.Printf("🔑 [SFMS] Token updated and verified successfully! (%d substations)", count)
+		if WSHub != nil {
+			WSHub.BroadcastRefresh()
+		}
+
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		_ = json.NewEncoder(w).Encode(map[string]interface{}{
+			"status":      "ok",
+			"message":     fmt.Sprintf("Bearer token verified and saved successfully! (%d substations loaded)", count),
+			"substations": count,
+		})
+	}
+
+	// POST /sfms/update-token & alias /update-token
+	mux.HandleFunc("/sfms/update-token", handleUpdateToken)
+	mux.HandleFunc("/update-token", handleUpdateToken)
+
+	// POST /sfms/refresh — triggers master data sync and state evaluation
+	mux.HandleFunc("/sfms/refresh", func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost {
+			writeJSONError(w, http.StatusMethodNotAllowed, "method not allowed")
+			return
+		}
+
+		go func() {
+			_ = sfmsMon.SyncMasterData(context.Background())
+			_ = sfmsMon.EvaluateFeederStates(context.Background(), true)
+			if WSHub != nil {
+				WSHub.BroadcastRefresh()
+			}
+		}()
+
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		_ = json.NewEncoder(w).Encode(map[string]string{"status": "ok"})
+	})
+}
+

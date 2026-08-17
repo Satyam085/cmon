@@ -283,3 +283,32 @@ func htmlEscape(value string) string {
 	)
 	return replacer.Replace(value)
 }
+
+// handleFeederStatusCommand generates and returns the on-demand GETCO SFMS feeder status report.
+func (c *Client) handleFeederStatusCommand(ctx context.Context, message *IncomingMessage) {
+	log.Println("⚡ /feederstatus command received on Telegram")
+
+	var report string
+	if c.FeederStatusProvider != nil {
+		report = c.FeederStatusProvider()
+	} else {
+		report = "⚠️ SFMS Feeder Monitor is not initialized."
+	}
+
+	targetChatID := c.ChatID
+	if message != nil && message.Chat.ID != 0 {
+		targetChatID = fmt.Sprintf("%d", message.Chat.ID)
+	}
+
+	replyMsg := Message{
+		ChatID:                targetChatID,
+		Text:                  report,
+		ParseMode:             "HTML",
+		DisableWebPagePreview: true,
+	}
+
+	if _, err := c.doRequest("sendMessage", replyMsg); err != nil {
+		log.Printf("⚠️  Failed to send /feederstatus reply: %v", err)
+	}
+}
+

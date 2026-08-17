@@ -1,0 +1,358 @@
+{
+  "api_url": "https://api.getco-sfms.in/api/SFMS/SFMS_Master_SubStation/Substation_feederInfo?GetCompressed_json=false&IsSequrityVerify=true&PROJCD=sfms",
+  "bearer_token": "Bearer lxtqXKSto57Irr1DPxKBJd5tfdraiItkoNUpfCwOtL-x8aCrR-PItE_9bE8Na4-Qt4uMQz8IeaFpnorR3tmvxRX3mzFJDnybDxW7mo3Ye5_C1eXWEzr5nore0W2zZT6zQEjIfucJ1mZHLY8PtViHsVYsqmUI9USb8Yo2Cg3QfUJtuQ7EFaFlbHezit5fjlauZOo3TdP0KPqIW_96hrYfuj4tIbROcJxMskGVfN-ZuxHejtZ7WyMmCGRAQRv1OuT2LFsSDKaMFj8CnZNLlGYnBGBPhaBhRrK3ghKrXMNPA2WyraUItpOXSoHAf1dQBdaOXe9lDqgtKHwI4OvMSbyPfb0w7IGLvZMGr7PHoJmFYBw8m_x5LblOz7xm5iSGpGeT5T1cLf9xFeShol2iYzh4vN21E521PnoKuzjS-cmXEdY3Ex4sj7eO94UvWUQZY5Rz6ifMidSLMoA3R42OWM7FZO0olljbXfiEYAHL86GYVrvpCtHvh1kyfdJtwaTnJMcgrpgVLcdbsvqV2DSfC0ZdS-I38rMRvex3NXCZO8u2Frw0q3XjzEqzDbl9XOwqmCTuQu0UyrjgcwXXQn8jEEFZCrH3pdu_CkM2ZQGaPK9wNBY9n24pHO_8Hqk1v5zAk1BaLWD-IXHU_qxINcxMjE2dY5D_M3hkQUF4xY9MQmVt8XkckCn4I67ZRc5mghELl-GN-7x5ZcRZ1rB9nOV862R9wKWGe5eYH_Gh5Z0FMAMOzSToR6cSGhYrluHhUHMPNVnPGov0rJpztfdEqja-KFNj8C70eZYymlYClFxy6jkzHL4vNM8kLYWnYuRg9Up80wD2q5s4IyjZEFufERZgEI7huZTAptkPnS51j6ThKAOdi5MxzjH-xb6dAH7XmHNUHVwl_dOobc7_8kUAoi2PS452f2IzC3KuRemDhG3kGGsTVG59cdSbFbVJpa7KarWRxhQZ7Y2DUlzsa7slrJ6pvOtZpOwhsBBAH6m1HWKF-NFER7RMLWczIhUrtKpwlMqJnpmEveb2PGGUOdQjERQCgX603wTEg7FSPn7uoRj2cyIFz6yLtjUPdytnZHdvNFbNTKbsIO-ad2pTAYcamZluFz69lK9vxKWScSh-bZzY0fNPqNb1MtfLYvn15RCJdDFClOZt_D-s9DGZUOCuy479ZDbXpw",
+  "dep_id": "500059",
+  "div_id": "64",
+  "enable_colors": true,
+  "web_port": 8890,
+  "filter_substations": [],
+  "filter_feeders": [
+    "11kV Bahej",
+    "11kV Bhimpore",
+    "11kV Hathuka",
+    "11kV Hill",
+    "11kV Khakhar",
+    "11kV Kumbhiya",
+    "11kV Ranveri",
+    "11kV Sankalp",
+    "11kV Kamalchhod",
+    "11kV Dhodhiya",
+    "11kV Kokanvad",
+    "11kV Madhuli",
+    "11kV Andhatri",
+    "11kV Dharampura",
+    "11kV Pahad",
+    "11kV Patel",
+    "11kV Dungari",
+    "11kV Godaun",
+    "11kV Nalotha",
+    "11kV Parshi",
+    "11kV Valmiki",
+    "11kV Ambach",
+    "11kV Degama",
+    "11kV Gandhi",
+    "11kV Khanpur",
+    "11kV Tad",
+    "11kV Bajipura",
+    "11kV Bavli",
+    "11kV Butwada",
+    "11kV Delwada",
+    "11kV Nansad",
+    "11kV Pavran",
+    "11kV Rupvada",
+    "11kV Siker",
+    "11kV Sumul",
+    "11kV Sumul Cattle",
+    "11kV Tokarva",
+    "11kV Valod (T)",
+    "11kV Vedchhi",
+    "11kV Buhari",
+    "11kV Dadariya",
+    "11kV Virpur"
+  ],
+  "telegram_bot_token": "",
+  "telegram_chat_id": "",
+  "discord_webhook_url": "",
+  "ntfy_topic": "my-getco-feeders-valod-8890-25894",
+  "ntfy_server": "https://ntfy.sh",
+  "daily_report_time": "07:00",
+  "enable_daily_report": true,
+  "ag_window_start": "08:00",
+  "ag_window_end": "16:00",
+  "feeder_schedules": {
+    "BAHEJ": {
+      "type": "AG",
+      "start": "07:00",
+      "end": "17:00",
+      "substation": "Bhimpore",
+      "code": "322707"
+    },
+    "BHIMPORE": {
+      "type": "JGY",
+      "start": "00:00",
+      "end": "24:00",
+      "substation": "Bhimpore",
+      "code": "322704"
+    },
+    "HATHUKA": {
+      "type": "AG",
+      "start": "07:00",
+      "end": "17:00",
+      "substation": "Bhimpore",
+      "code": "322706"
+    },
+    "HILL": {
+      "type": "HTEX",
+      "start": "00:00",
+      "end": "24:00",
+      "substation": "Bhimpore",
+      "code": "322702"
+    },
+    "KHAKHAR": {
+      "type": "AG",
+      "start": "07:00",
+      "end": "17:00",
+      "substation": "Bhimpore",
+      "code": "322701"
+    },
+    "KUMBHIYA": {
+      "type": "AG",
+      "start": "07:00",
+      "end": "17:00",
+      "substation": "Bhimpore",
+      "code": "322705"
+    },
+    "RANVERI": {
+      "type": "JGY",
+      "start": "00:00",
+      "end": "24:00",
+      "substation": "Bhimpore",
+      "code": "322703"
+    },
+    "SANKALP": {
+      "type": "HTEX",
+      "start": "00:00",
+      "end": "24:00",
+      "substation": "Bhimpore",
+      "code": "322708"
+    },
+    "KAMALCHHOD": {
+      "type": "AG",
+      "start": "06:00",
+      "end": "16:00",
+      "substation": "Borakhadi",
+      "code": "321106"
+    },
+    "DHODHIYA": {
+      "type": "AG",
+      "start": "06:00",
+      "end": "16:00",
+      "substation": "Degama",
+      "code": "329801"
+    },
+    "KOKANVAD": {
+      "type": "AG",
+      "start": "06:00",
+      "end": "16:00",
+      "substation": "Degama",
+      "code": "329802"
+    },
+    "MADHULI": {
+      "type": "JGY",
+      "start": "00:00",
+      "end": "24:00",
+      "substation": "Degama",
+      "code": "329803"
+    },
+    "ANDHATRI": {
+      "type": "JGY",
+      "start": "00:00",
+      "end": "24:00",
+      "substation": "Godadha",
+      "code": "532802"
+    },
+    "DHARAMPURA": {
+      "type": "AG",
+      "start": "06:00",
+      "end": "16:00",
+      "substation": "Godadha",
+      "code": "532804"
+    },
+    "PAHAD": {
+      "type": "AG",
+      "start": "06:00",
+      "end": "16:00",
+      "substation": "Godadha",
+      "code": "532803"
+    },
+    "PATEL": {
+      "type": "JGY",
+      "start": "00:00",
+      "end": "24:00",
+      "substation": "Godadha",
+      "code": "532801"
+    },
+    "DUNGARI": {
+      "type": "AG",
+      "start": "06:00",
+      "end": "16:00",
+      "substation": "Kelkui",
+      "code": "388705"
+    },
+    "GODAUN": {
+      "type": "JGY",
+      "start": "00:00",
+      "end": "24:00",
+      "substation": "Kelkui",
+      "code": "388703"
+    },
+    "NALOTHA": {
+      "type": "AG",
+      "start": "06:00",
+      "end": "16:00",
+      "substation": "Kelkui",
+      "code": "388702"
+    },
+    "PARSHI": {
+      "type": "AG",
+      "start": "06:00",
+      "end": "16:00",
+      "substation": "Kelkui",
+      "code": "388701"
+    },
+    "VALMIKI": {
+      "type": "JGY",
+      "start": "00:00",
+      "end": "24:00",
+      "substation": "Kelkui",
+      "code": "388704"
+    },
+    "AMBACH": {
+      "type": "JGY",
+      "start": "00:00",
+      "end": "24:00",
+      "substation": "Rupvada",
+      "code": "322205"
+    },
+    "DEGAMA": {
+      "type": "JGY",
+      "start": "00:00",
+      "end": "24:00",
+      "substation": "Rupvada",
+      "code": "322203"
+    },
+    "GANDHI": {
+      "type": "AGSKY",
+      "start": "06:00",
+      "end": "16:00",
+      "substation": "Rupvada",
+      "code": "322206"
+    },
+    "KHANPUR": {
+      "type": "AGSKY",
+      "start": "06:00",
+      "end": "16:00",
+      "substation": "Rupvada",
+      "code": "322202"
+    },
+    "TAD": {
+      "type": "AG",
+      "start": "06:00",
+      "end": "16:00",
+      "substation": "Rupvada",
+      "code": "322208"
+    },
+    "BAJIPURA": {
+      "type": "AG",
+      "start": "06:00",
+      "end": "16:00",
+      "substation": "Valod",
+      "code": "102503"
+    },
+    "BAVLI": {
+      "type": "AG",
+      "start": "06:00",
+      "end": "16:00",
+      "substation": "Valod",
+      "code": "102502"
+    },
+    "BUTWADA": {
+      "type": "JGY",
+      "start": "00:00",
+      "end": "24:00",
+      "substation": "Valod",
+      "code": "102512"
+    },
+    "DELWADA": {
+      "type": "JGY",
+      "start": "00:00",
+      "end": "24:00",
+      "substation": "Valod",
+      "code": "102515"
+    },
+    "NANSAD": {
+      "type": "AG",
+      "start": "06:00",
+      "end": "16:00",
+      "substation": "Valod",
+      "code": "102507"
+    },
+    "PAVRAN": {
+      "type": "AG",
+      "start": "06:00",
+      "end": "16:00",
+      "substation": "Valod",
+      "code": "102514"
+    },
+    "RUPVADA": {
+      "type": "AG",
+      "start": "06:00",
+      "end": "16:00",
+      "substation": "Valod",
+      "code": "102511"
+    },
+    "SIKER": {
+      "type": "AG",
+      "start": "06:00",
+      "end": "16:00",
+      "substation": "Valod",
+      "code": "102508"
+    },
+    "SUMUL": {
+      "type": "JGY",
+      "start": "00:00",
+      "end": "24:00",
+      "substation": "Valod",
+      "code": "102504"
+    },
+    "SUMUL CATTLE": {
+      "type": "HTEX",
+      "start": "00:00",
+      "end": "24:00",
+      "substation": "Valod",
+      "code": "102513"
+    },
+    "TOKARVA": {
+      "type": "AG",
+      "start": "06:00",
+      "end": "16:00",
+      "substation": "Valod",
+      "code": "102509"
+    },
+    "VALOD (T)": {
+      "type": "JGY",
+      "start": "00:00",
+      "end": "24:00",
+      "substation": "Valod",
+      "code": "102501"
+    },
+    "VEDCHHI": {
+      "type": "JGY",
+      "start": "00:00",
+      "end": "24:00",
+      "substation": "Valod",
+      "code": "102506"
+    },
+    "BUHARI": {
+      "type": "JGY",
+      "start": "00:00",
+      "end": "24:00",
+      "substation": "Virpore",
+      "code": "140202"
+    },
+    "DADARIYA": {
+      "type": "AG",
+      "start": "06:00",
+      "end": "16:00",
+      "substation": "Virpore",
+      "code": "140206"
+    },
+    "VIRPUR": {
+      "type": "AG",
+      "start": "06:00",
+      "end": "16:00",
+      "substation": "Virpore",
+      "code": "140204"
+    }
+  }
+}

@@ -61,8 +61,9 @@ const requestTimeout = 30 * time.Second
 //   - recipientJID:  The parsed JID to send messages to
 //   - wa_message_id string (via stor interface)
 type Client struct {
-	wm           *whatsmeow.Client
-	recipientJID types.JID
+	wm                   *whatsmeow.Client
+	recipientJID         types.JID
+	FeederStatusProvider func() string
 }
 
 // NewClient creates a new WhatsApp client from environment variables.
@@ -370,6 +371,19 @@ func (c *Client) HandleEvents(ctx context.Context, sc *session.Client, stor inte
 		if lower == "/summary" {
 			log.Println("📊 WhatsApp /summary command received")
 			go c.handleSummaryCommand(ctx, sc, stor)
+			return
+		}
+
+		// Handle /feederstatus and /sfms commands
+		if lower == "/feederstatus" || lower == "/sfms" {
+			log.Println("⚡ WhatsApp /feederstatus command received")
+			go func() {
+				if c.FeederStatusProvider != nil {
+					_ = c.SendMessage(c.FeederStatusProvider())
+				} else {
+					_ = c.SendMessage("⚠️ SFMS Feeder Monitor is not initialized.")
+				}
+			}()
 			return
 		}
 

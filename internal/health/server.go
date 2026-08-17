@@ -16,6 +16,7 @@ import (
 
 	"cmon/internal/metrics"
 	"cmon/internal/session"
+	"cmon/internal/sfms"
 	"cmon/internal/storage"
 )
 
@@ -201,12 +202,14 @@ func StartServer(
 	refreshFn RefreshFunc,
 	resolveFn ResolveCallbackFunc,
 	registerLocalFn RegisterLocalFunc,
+	sfmsMon *sfms.Monitor,
 ) *http.Server {
 	WSHub = NewHub()
 	go WSHub.Run()
 
 	mux := http.NewServeMux()
 	registerComplaintDashboard(mux, monitor, sc, stor, refreshFn, resolveFn, registerLocalFn)
+	registerSFMSDashboard(mux, sfmsMon)
 	registerStatusEndpoints(mux, monitor)
 
 	mux.HandleFunc("/ws", func(w http.ResponseWriter, r *http.Request) {

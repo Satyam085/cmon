@@ -106,6 +106,10 @@ type Config struct {
 	APIRateLimitRPS   float64 // Sustained req/s ceiling for the DGVCL API
 	APIRateLimitBurst int     // Token-bucket burst size
 	APIMaxRetries429  int     // Max 429 retry attempts per request
+
+	// GETCO SFMS Feeder Monitor configuration
+	SFMSEnabled    bool   // Enable SFMS monitoring (default true)
+	SFMSConfigPath string // Path to SFMS config JSON (e.g. smfs/config.json)
 }
 
 // LoadConfig loads configuration from environment variables with defaults.
@@ -203,6 +207,10 @@ func LoadConfig() (*Config, error) {
 		APIRateLimitRPS:   getEnvFloat("API_RATE_LIMIT_RPS", 3.0),
 		APIRateLimitBurst: getEnvInt("API_RATE_LIMIT_BURST", 5),
 		APIMaxRetries429:  getEnvInt("API_MAX_RETRIES_429", 5),
+
+		// SFMS Feeder Monitoring configuration
+		SFMSEnabled:    getEnvOrDefault("SFMS_ENABLED", "true") == "true",
+		SFMSConfigPath: os.Getenv("SFMS_CONFIG_PATH"),
 	}
 
 	// Step 4: Validate required fields
