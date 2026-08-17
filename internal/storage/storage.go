@@ -1280,4 +1280,32 @@ func (s *Storage) GetSFMSToken() (string, error) {
 	return token, nil
 }
 
+// GetSFMSTokenUpdatedAt retrieves the timestamp when the Bearer token was last updated.
+func (s *Storage) GetSFMSTokenUpdatedAt() (time.Time, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	var updatedAt string
+	err := s.db.QueryRow(`SELECT updated_at FROM sfms_config WHERE key = 'bearer_token'`).Scan(&updatedAt)
+	if err == sql.ErrNoRows || updatedAt == "" {
+		return time.Time{}, nil
+	}
+	if err != nil {
+		return time.Time{}, fmt.Errorf("get sfms token updated_at: %w", err)
+	}
+
+	layouts := []string{
+		"2006-01-02 15:04:05",
+		time.RFC3339,
+		"2006-01-02T15:04:05Z",
+	}
+	for _, layout := range layouts {
+		if t, err := time.Parse(layout, updatedAt); err == nil {
+			return t.UTC(), nil
+		}
+	}
+	return time.Time{}, nil
+}
+
+
 

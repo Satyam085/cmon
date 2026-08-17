@@ -70,12 +70,13 @@ type DashboardSummary struct {
 
 // DashboardPayload is the JSON structure returned by GET /sfms/data.
 type DashboardPayload struct {
-	GeneratedAt string                     `json:"generated_at"`
-	TokenActive bool                       `json:"token_active"`
-	TokenError  string                     `json:"token_error,omitempty"`
-	Summary     DashboardSummary           `json:"summary"`
-	Groups      []DashboardSubstationGroup `json:"groups"`
-	Events      []storage.SFMSEvent        `json:"events"`
+	GeneratedAt    string                     `json:"generated_at"`
+	TokenActive    bool                       `json:"token_active"`
+	TokenError     string                     `json:"token_error,omitempty"`
+	TokenUpdatedAt string                     `json:"token_updated_at,omitempty"`
+	Summary        DashboardSummary           `json:"summary"`
+	Groups         []DashboardSubstationGroup `json:"groups"`
+	Events         []storage.SFMSEvent        `json:"events"`
 }
 
 // Monitor coordinates SFMS REST API polling, real-time MQTT telemetry diffing, and alerting.
@@ -92,6 +93,7 @@ type Monitor struct {
 	isFirstRun        bool
 	authFailed        bool
 	lastAuthError     string
+	tokenUpdatedAt    time.Time
 
 	debounceMu    sync.Mutex
 	debounceTimer *time.Timer
@@ -106,15 +108,30 @@ func NewMonitor(
 	stor *storage.Storage,
 	wsHub WSRefreshBroadcaster,
 ) *Monitor {
+	var tokenUpdatedAt time.Time
+	if stor != nil {
+		if t, err := stor.GetSFMSTokenUpdatedAt(); err == nil && !t.IsZero() {
+			tokenUpdatedAt = t
+		}
+	}
+	if tokenUpdatedAt.IsZero() {
+		if fi, err := os.Stat("token.txt"); err == nil {
+			tokenUpdatedAt = fi.ModTime()
+		} else if fi, err := os.Stat("smfs/token.txt"); err == nil {
+			tokenUpdatedAt = fi.ModTime()
+		}
+	}
+
 	return &Monitor{
-		config:     cfg,
-		sfmsClient: client,
-		telemetry:  telemetry,
-		notifier:   notifier,
-		stor:       stor,
-		wsHub:      wsHub,
-		states:     make(map[int]*FeederState),
-		isFirstRun: true,
+		config:         cfg,
+		sfmsClient:     client,
+		telemetry:      telemetry,
+		notifier:       notifier,
+		stor:           stor,
+		wsHub:          wsHub,
+		states:         make(map[int]*FeederState),
+		isFirstRun:     true,
+		tokenUpdatedAt: tokenUpdatedAt,
 	}
 }
 
@@ -498,7 +515,9 @@ func (m *Monitor) UpdateTokenAndVerify(ctx context.Context, rawToken string) (in
 		_ = m.stor.SetSFMSToken(norm)
 	}
 
+	now := time.Now()
 	m.mu.Lock()
+	m.tokenUpdatedAt = now
 	if m.authFailed {
 		m.authFailed = false
 		m.lastAuthError = ""
@@ -810,14 +829,28 @@ func (m *Monitor) GetDashboardPayload() DashboardPayload {
 	}
 
 	tokenActive := !m.authFailed && m.config.BearerToken != ""
+	tokenUpdatedStr := ""
+	var tokenTime time.Time
+	if m.stor != nil {
+		if t, err := m.stor.GetSFMSTokenUpdatedAt(); err == nil && !t.IsZero() {
+			tokenTime = t
+		}
+	}
+	if tokenTime.IsZero() && !m.tokenUpdatedAt.IsZero() {
+		tokenTime = m.tokenUpdatedAt
+	}
+	if !tokenTime.IsZero() {
+		tokenUpdatedStr = tokenTime.In(IST).Format("02 Jan 2006, 03:04 PM")
+	}
 
 	return DashboardPayload{
-		GeneratedAt: FormatTimeIST(now),
-		TokenActive: tokenActive,
-		TokenError:  m.lastAuthError,
-		Summary:     summary,
-		Groups:      groups,
-		Events:      recentEvents,
+		GeneratedAt:    FormatTimeIST(now),
+		TokenActive:    tokenActive,
+		TokenError:     m.lastAuthError,
+		TokenUpdatedAt: tokenUpdatedStr,
+		Summary:        summary,
+		Groups:         groups,
+		Events:         recentEvents,
 	}
 }
 

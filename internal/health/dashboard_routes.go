@@ -455,9 +455,10 @@ func registerSFMSDashboard(mux *http.ServeMux, sfmsMon *sfms.Monitor) {
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusOK)
 		_ = json.NewEncoder(w).Encode(map[string]interface{}{
-			"status":      "ok",
-			"message":     fmt.Sprintf("Bearer token verified and saved successfully! (%d substations loaded)", count),
-			"substations": count,
+			"status":           "ok",
+			"message":          fmt.Sprintf("Bearer token verified and saved successfully! (%d substations loaded)", count),
+			"substations":      count,
+			"token_updated_at": sfms.NowIST().Format("02 Jan 2006, 03:04 PM"),
 		})
 	}
 

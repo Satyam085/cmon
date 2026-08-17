@@ -679,9 +679,10 @@ var sfmsPageTemplate = template.Must(template.New("sfms-page").Parse(`<!DOCTYPE 
     <!-- Token Manager Panel -->
     <div class="token-box">
       <div class="token-box-header">
-        <div>
-          <span style="font-weight: 700; margin-right: 8px;">GETCO SFMS Authentication</span>
+        <div style="display: flex; align-items: center; gap: 8px; flex-wrap: wrap;">
+          <span style="font-weight: 700; margin-right: 4px;">GETCO SFMS Authentication</span>
           <span id="tokenStatusBadge" class="token-status-badge">Checking...</span>
+          <span id="tokenUpdatedTime" style="font-size: 12px; color: var(--text-dim); font-family: var(--font-mono);"></span>
         </div>
         <button class="btn" style="padding: 4px 10px; font-size: 12px;" onclick="toggleTokenBox()">
           Paste 24h Bearer Token ▾
@@ -691,6 +692,7 @@ var sfmsPageTemplate = template.Must(template.New("sfms-page").Parse(`<!DOCTYPE 
         <p style="font-size: 13px; color: var(--text-dim); margin: 0 0 8px;">
           Paste your fresh GETCO SFMS Bearer Token below to update the monitor live without restarting the daemon.
         </p>
+        <div id="tokenLastUpdatedDetail" style="font-size: 12px; color: var(--text-dim); margin-bottom: 10px; font-family: var(--font-mono);"></div>
         <textarea id="tokenInput" class="token-textarea" placeholder="Bearer lxtqXKSto57Irr1DPxKB..."></textarea>
         <button id="saveTokenBtn" class="btn btn-primary" onclick="saveToken()">⚡ Update & Verify Token</button>
         <div id="tokenAlert" class="alert-msg"></div>
@@ -806,12 +808,29 @@ var sfmsPageTemplate = template.Must(template.New("sfms-page").Parse(`<!DOCTYPE 
       document.getElementById('statDormant').innerText = s.dormant || 0;
 
       const badge = document.getElementById('tokenStatusBadge');
+      const updatedTimeEl = document.getElementById('tokenUpdatedTime');
+      const detailEl = document.getElementById('tokenLastUpdatedDetail');
+
       if (currentPayload.token_active) {
         badge.className = 'token-status-badge active';
         badge.innerHTML = '● Token Active & Verified';
       } else {
         badge.className = 'token-status-badge expired';
         badge.innerHTML = '⚠️ Token Expired / Invalid';
+      }
+
+      if (currentPayload.token_updated_at) {
+        if (updatedTimeEl) {
+          updatedTimeEl.innerText = '• Token updated in DB: ' + currentPayload.token_updated_at;
+          updatedTimeEl.style.display = 'inline';
+        }
+        if (detailEl) {
+          detailEl.innerText = '💾 Token updated in database: ' + currentPayload.token_updated_at + ' IST';
+          detailEl.style.display = 'block';
+        }
+      } else {
+        if (updatedTimeEl) updatedTimeEl.style.display = 'none';
+        if (detailEl) detailEl.style.display = 'none';
       }
     }
 

@@ -28,6 +28,14 @@ func TestSFMSStorage(t *testing.T) {
 		t.Errorf("got token %q, want %q", gotToken, token)
 	}
 
+	updatedAt, err := stor.GetSFMSTokenUpdatedAt()
+	if err != nil {
+		t.Fatalf("GetSFMSTokenUpdatedAt failed: %v", err)
+	}
+	if updatedAt.IsZero() {
+		t.Errorf("expected non-zero token updated_at timestamp")
+	}
+
 	// Test SaveSFMSFeeders and GetSFMSFeeders
 	now := time.Now().Truncate(time.Second)
 	feeders := []SFMSFeederRecord{
