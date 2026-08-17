@@ -87,12 +87,12 @@ var sfmsPageTemplate = template.Must(template.New("sfms-page").Parse(`<!DOCTYPE 
       padding: 4px 0 20px;
       border-bottom: 1px solid var(--border);
       margin-bottom: 24px;
-      flex-wrap: wrap;
     }
     .topbar-left {
       display: flex;
       align-items: center;
       gap: 14px;
+      min-width: 0;
     }
     .logo {
       font-family: var(--font-mono);
@@ -103,22 +103,29 @@ var sfmsPageTemplate = template.Must(template.New("sfms-page").Parse(`<!DOCTYPE 
       display: flex;
       align-items: center;
       gap: 8px;
+      white-space: nowrap;
     }
+    .logo span { color: var(--accent); }
     .nav-tabs {
-      display: flex;
-      gap: 6px;
+      display: inline-flex;
+      gap: 4px;
       background: var(--surface-bright);
       padding: 3px;
       border-radius: var(--r-md);
+      border: 1px solid var(--border);
     }
     .nav-tab {
-      padding: 6px 14px;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      padding: 5px 12px;
       border-radius: var(--r-sm);
       text-decoration: none;
-      font-size: 13px;
+      font-size: 12.5px;
       font-weight: 600;
       color: var(--text-dim);
       transition: all 0.15s ease;
+      white-space: nowrap;
     }
     .nav-tab:hover {
       color: var(--text);
@@ -133,6 +140,18 @@ var sfmsPageTemplate = template.Must(template.New("sfms-page").Parse(`<!DOCTYPE 
       display: flex;
       align-items: center;
       gap: 10px;
+      flex-shrink: 0;
+    }
+    .topbar-actions {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+    .live-time {
+      font-family: var(--font-mono);
+      font-size: 13px;
+      color: var(--text-dim);
+      white-space: nowrap;
     }
     .btn {
       display: inline-flex;
@@ -451,6 +470,7 @@ var sfmsPageTemplate = template.Must(template.New("sfms-page").Parse(`<!DOCTYPE 
       padding: 18px 20px;
       margin-top: 32px;
       box-shadow: var(--shadow-sm);
+      overflow: hidden;
     }
     .events-title {
       font-size: 15px;
@@ -460,8 +480,27 @@ var sfmsPageTemplate = template.Must(template.New("sfms-page").Parse(`<!DOCTYPE 
       align-items: center;
       gap: 8px;
     }
+    .tbl-wrap {
+      width: 100%;
+      overflow-x: auto;
+      -webkit-overflow-scrolling: touch;
+      scrollbar-width: thin;
+      scrollbar-color: var(--border-strong) transparent;
+    }
+    .tbl-wrap::-webkit-scrollbar {
+      height: 6px;
+    }
+    .tbl-wrap::-webkit-scrollbar-track {
+      background: var(--surface-bright);
+      border-radius: 3px;
+    }
+    .tbl-wrap::-webkit-scrollbar-thumb {
+      background: var(--border-strong);
+      border-radius: 3px;
+    }
     .events-table {
       width: 100%;
+      min-width: 720px;
       border-collapse: collapse;
       font-size: 13px;
     }
@@ -484,25 +523,158 @@ var sfmsPageTemplate = template.Must(template.New("sfms-page").Parse(`<!DOCTYPE 
     .events-table tr:last-child td {
       border-bottom: none;
     }
+
+    /* ── Mobile responsive ── */
+    @media (max-width: 768px) {
+      .shell {
+        padding: 12px 12px 32px;
+        max-width: 100%;
+      }
+      .topbar {
+        display: grid;
+        grid-template-columns: 1fr auto;
+        grid-template-areas:
+          "left time"
+          "nav nav"
+          "actions actions";
+        gap: 10px 8px;
+        align-items: center;
+        padding-bottom: 14px;
+        margin-bottom: 16px;
+      }
+      .topbar-left {
+        grid-area: left;
+        min-width: 0;
+      }
+      .logo { font-size: 15px; }
+      .live-time {
+        grid-area: time;
+        font-size: 11.5px;
+        text-align: right;
+      }
+      .nav-tabs {
+        grid-area: nav;
+        display: flex;
+        width: 100%;
+        box-sizing: border-box;
+      }
+      .nav-tab {
+        flex: 1 1 50%;
+        text-align: center;
+        padding: 7px 8px;
+        font-size: 12px;
+      }
+      .topbar-right {
+        display: contents;
+      }
+      .topbar-actions {
+        grid-area: actions;
+        display: flex;
+        width: 100%;
+        gap: 8px;
+      }
+      .topbar-actions .btn {
+        flex: 1 1 50%;
+        justify-content: center;
+        padding: 8px 10px;
+        font-size: 12px;
+      }
+
+      .metrics-grid {
+        grid-template-columns: repeat(2, 1fr);
+        gap: 8px;
+        margin-bottom: 16px;
+      }
+      .metric-card {
+        padding: 11px 12px;
+      }
+      .metric-title {
+        font-size: 10px;
+        letter-spacing: 0.04em;
+        margin-bottom: 4px;
+      }
+      .metric-val {
+        font-size: 22px;
+      }
+
+      .control-bar {
+        flex-direction: column;
+        align-items: stretch;
+        gap: 10px;
+        margin-bottom: 16px;
+      }
+      .search-box {
+        max-width: 100%;
+        min-width: 0;
+        width: 100%;
+      }
+      .search-input {
+        font-size: 16px; /* prevents iOS auto-zoom */
+        padding: 9px 12px 9px 34px;
+      }
+      .filters {
+        overflow-x: auto;
+        flex-wrap: nowrap;
+        padding-bottom: 4px;
+        -webkit-overflow-scrolling: touch;
+        scrollbar-width: none;
+      }
+      .filters::-webkit-scrollbar { display: none; }
+      .filter-chip {
+        flex-shrink: 0;
+        font-size: 11.5px;
+        padding: 4px 10px;
+      }
+
+      .feeders-grid {
+        grid-template-columns: 1fr;
+        padding: 12px;
+        gap: 10px;
+      }
+      .substation-header {
+        padding: 11px 14px;
+      }
+      .substation-title {
+        font-size: 13.5px;
+      }
+
+      .events-card {
+        padding: 14px 14px;
+        margin-top: 20px;
+      }
+      .events-title {
+        font-size: 13.5px;
+        margin-bottom: 10px;
+      }
+      .events-table th, .events-table td {
+        padding: 7px 9px;
+        font-size: 11.5px;
+      }
+      .events-table th {
+        font-size: 10px;
+      }
+    }
   </style>
 </head>
 <body>
   <div class="shell">
     <!-- Top Bar -->
-    <div class="topbar">
+    <header class="topbar">
       <div class="topbar-left">
-        <div class="logo">⚡ CMON / SFMS</div>
-        <div class="nav-tabs">
-          <a href="/" class="nav-tab">📋 Complaints</a>
-          <a href="/sfms" class="nav-tab active">⚡ Feeder Monitor</a>
+        <div class="logo">⚡ CMON<span>/SFMS</span></div>
+      </div>
+      <nav class="nav-tabs" aria-label="Page navigation">
+        <a href="/" class="nav-tab">📋 Complaints</a>
+        <a href="/sfms" class="nav-tab active">⚡ Feeder Monitor</a>
+      </nav>
+      <div class="topbar-right">
+        <span id="liveTime" class="live-time">--:--:--</span>
+        <div class="topbar-actions">
+          <button class="btn" id="refreshBtn" onclick="triggerRefresh()">🔄 Refresh Data</button>
+          <button class="btn btn-primary" onclick="toggleTokenBox()">🔑 Update Token</button>
         </div>
       </div>
-      <div class="topbar-right">
-        <span id="liveTime" style="font-family: var(--font-mono); font-size: 13px; color: var(--text-dim); margin-right: 8px;">--:--:--</span>
-        <button class="btn" id="refreshBtn" onclick="triggerRefresh()">🔄 Refresh Data</button>
-        <button class="btn btn-primary" onclick="toggleTokenBox()">🔑 Update Token</button>
-      </div>
-    </div>
+    </header>
 
     <!-- Token Manager Panel -->
     <div class="token-box">
@@ -573,22 +745,24 @@ var sfmsPageTemplate = template.Must(template.New("sfms-page").Parse(`<!DOCTYPE 
     <!-- Outage & Event History Log -->
     <div class="events-card">
       <div class="events-title">📜 Recent Interruption & Restoration Log</div>
-      <table class="events-table">
-        <thead>
-          <tr>
-            <th>Time (IST)</th>
-            <th>Event</th>
-            <th>Feeder</th>
-            <th>Substation</th>
-            <th>Category</th>
-            <th>Downtime</th>
-            <th>Details</th>
-          </tr>
-        </thead>
-        <tbody id="eventsTbody">
-          <tr><td colspan="7" style="text-align: center; color: var(--text-faint);">No recent events recorded.</td></tr>
-        </tbody>
-      </table>
+      <div class="tbl-wrap">
+        <table class="events-table">
+          <thead>
+            <tr>
+              <th>Time (IST)</th>
+              <th>Event</th>
+              <th>Feeder</th>
+              <th>Substation</th>
+              <th>Category</th>
+              <th>Downtime</th>
+              <th>Details</th>
+            </tr>
+          </thead>
+          <tbody id="eventsTbody">
+            <tr><td colspan="7" style="text-align: center; color: var(--text-faint);">No recent events recorded.</td></tr>
+          </tbody>
+        </table>
+      </div>
     </div>
   </div>
 
