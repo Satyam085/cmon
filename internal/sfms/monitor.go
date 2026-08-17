@@ -399,6 +399,7 @@ func (m *Monitor) EvaluateFeederStates(ctx context.Context, printSummary bool) e
 					prev.BMUIsActive = f.BMUISACT
 
 					stateHasChanged = true
+					newInterruptionAlerts = append(newInterruptionAlerts, f.Name)
 					m.notifier.SendInterruption(ctx, f.Name, ss.Name, f.FID, f.FdrCode, f.BMUSerialNo, fType)
 				} else if !prev.IsOnline && isOnline {
 					// TRANSITION: Interrupted -> Restored
@@ -414,6 +415,7 @@ func (m *Monitor) EvaluateFeederStates(ctx context.Context, printSummary bool) e
 					prev.BMUIsActive = f.BMUISACT
 
 					stateHasChanged = true
+					newRecoveryAlerts = append(newRecoveryAlerts, f.Name)
 					m.notifier.SendRecovery(ctx, f.Name, ss.Name, f.FID, downtimeStr, fType)
 				} else {
 					prev.IsActive = f.ISACT

@@ -90,7 +90,8 @@ func (tc *TelemetryClient) Start(ctx context.Context) error {
 		"Origin": []string{"https://getco-sfms.in"},
 	})
 	opts.SetCleanSession(true)
-	opts.SetKeepAlive(60 * time.Second)
+	opts.SetKeepAlive(20 * time.Second)
+	opts.SetPingTimeout(10 * time.Second)
 	opts.SetAutoReconnect(true)
 	opts.SetMaxReconnectInterval(5 * time.Second)
 
@@ -275,6 +276,8 @@ func (tc *TelemetryClient) updateBreakerStates(did string, values map[string]Tag
 					curr.Status = "CLOSED"
 				} else if curr.CBON == 0 && curr.CBOFF == 1 {
 					curr.Status = "OPEN"
+				} else if curr.CBON == 0 && curr.CBOFF == 0 {
+					curr.Status = "OPEN"
 				} else if curr.CBON == 1 && curr.CBOFF == 1 {
 					curr.Status = "ERROR"
 				} else {
@@ -303,7 +306,7 @@ func (tc *TelemetryClient) GetBreakerState(deviceID string, seq int) (cbon int, 
 
 	key := fmt.Sprintf("%s:%d", deviceID, seq)
 	b, exists := tc.breakers[key]
-	if !exists || (b.CBON == 0 && b.CBOFF == 0 && b.Status == "UNKNOWN") {
+	if !exists {
 		return 0, 0, "UNKNOWN", false, time.Time{}
 	}
 
