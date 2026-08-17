@@ -9,6 +9,7 @@ import (
 	"log"
 	"net/http"
 	"os"
+	"strings"
 	"sync"
 	"time"
 )
@@ -192,8 +193,13 @@ func (c *Client) FetchSubstations(ctx context.Context) ([]Substation, error) {
 	return apiResp.Data, nil
 }
 
-// FetchDeviceMappedGroups queries the telemetry mapping group IDs for the given device IDs.
-func (c *Client) FetchDeviceMappedGroups(ctx context.Context, groupType string, deviceIDs []string) ([]DeviceGroup, error) {
+// FetchDeviceMappedGroups queries GETCO SFMS API for device telemetry mapped group IDs.
+func (c *Client) FetchDeviceMappedGroups(ctx context.Context, keyword string, deviceIDs []string) ([]DeviceGroup, error) {
+	if len(deviceIDs) == 0 {
+		return nil, nil
+	}
+	c.reloadTokenIfChanged()
+
 	c.mu.RLock()
 	token := c.config.BearerToken
 	c.mu.RUnlock()
@@ -202,16 +208,12 @@ func (c *Client) FetchDeviceMappedGroups(ctx context.Context, groupType string, 
 		return nil, fmt.Errorf("bearer token is empty")
 	}
 
-	url := fmt.Sprintf("https://api.getco-sfms.in/api/Device/GetDevicemappedGroup?grpType=%s&IsSequrityVerify=true&PROJCD=sfms", groupType)
+	reqURL := fmt.Sprintf("https://api.getco-sfms.in/api/Device/GetDevicemappedGroup?GroupKeyWord_cs=%s&deviceId_cs=%s&PROJCD=sfms",
+		keyword, strings.Join(deviceIDs, ","))
 
-	bodyBytes, err := json.Marshal(deviceIDs)
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, reqURL, nil)
 	if err != nil {
-		return nil, fmt.Errorf("failed to marshal device IDs payload: %w", err)
-	}
-
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(bodyBytes))
-	if err != nil {
-		return nil, fmt.Errorf("failed to create HTTP request: %w", err)
+		return nil, fmt.Errorf("failed to create DeviceGroup HTTP request: %w", err)
 	}
 
 	setCommonHeaders(req)
@@ -219,18 +221,22 @@ func (c *Client) FetchDeviceMappedGroups(ctx context.Context, groupType string, 
 
 	resp, err := c.httpClient.Do(req)
 	if err != nil {
-		return nil, fmt.Errorf("HTTP request failed: %w", err)
+		return nil, fmt.Errorf("DeviceGroup HTTP request failed: %w", err)
 	}
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
 		respBody, _ := io.ReadAll(resp.Body)
-		return nil, fmt.Errorf("API returned HTTP %d: %s", resp.StatusCode, string(respBody))
+		return nil, fmt.Errorf("DeviceGroup API returned HTTP %d: %s", resp.StatusCode, string(respBody))
 	}
 
 	var groupResp DeviceGroupResponse
 	if err := json.NewDecoder(resp.Body).Decode(&groupResp); err != nil {
-		return nil, fmt.Errorf("failed to decode JSON response: %w", err)
+		return nil, fmt.Errorf("failed to decode DeviceGroup JSON response: %w", err)
+	}
+
+	if !groupResp.Result.Flag && len(groupResp.Data) == 0 {
+		return nil, fmt.Errorf("DeviceGroup API error result: %s", groupResp.Result.Message)
 	}
 
 	return groupResp.Data, nil

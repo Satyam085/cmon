@@ -155,6 +155,7 @@ func (tc *TelemetryClient) UpdateSubscriptions(ctx context.Context, substations 
 
 	groups, err := tc.sfmsClient.FetchDeviceMappedGroups(ctx, "SS-IOMONITORING", deviceIDs)
 	if err != nil {
+		log.Printf("[%s] ⚠️  [WEBSOCKET] Failed to fetch device mapped groups: %v", FormatNowIST(), err)
 		return fmt.Errorf("failed to fetch device mapped groups: %w", err)
 	}
 
@@ -166,6 +167,8 @@ func (tc *TelemetryClient) UpdateSubscriptions(ctx context.Context, substations 
 		}
 	}
 	tc.mu.Unlock()
+
+	log.Printf("[%s] 🌐 [WEBSOCKET] Subscribed to %d device telemetry group(s)", FormatNowIST(), len(groups))
 
 	tc.resubscribeAll()
 	return nil
@@ -417,39 +420,39 @@ func parseValuesPayload(payloadStr string, configs map[string]TagConfig) map[str
 	for _, item := range rawList {
 		for uuid, valStr := range item {
 			cleanUUID := strings.Trim(uuid, "'\" ")
-			cfg, exists := configs[cleanUUID]
-			if !exists {
-				continue
-			}
-
 			parts := strings.Split(valStr, ",")
 			cleanParts := make([]string, len(parts))
 			for i, p := range parts {
 				cleanParts[i] = strings.Trim(p, "'\" ")
 			}
 
-			val := ""
-			if len(cleanParts) > 0 {
-				val = cleanParts[0]
-			}
-			alarmSt := ""
+			val := "null"
 			if len(cleanParts) > 1 {
-				alarmSt = cleanParts[1]
+				val = cleanParts[1]
+			}
+			alrm := ""
+			if len(cleanParts) > 2 {
+				alrm = cleanParts[2]
 			}
 			ts := ""
-			if len(cleanParts) > 2 {
-				ts = cleanParts[2]
+			if len(cleanParts) > 3 {
+				ts = cleanParts[3]
 			}
 			qos := ""
-			if len(cleanParts) > 3 {
-				qos = cleanParts[3]
+			if len(cleanParts) > 4 {
+				qos = cleanParts[4]
+			}
+
+			nm := ""
+			if cfg, exists := configs[cleanUUID]; exists {
+				nm = cfg.NM
 			}
 
 			values[cleanUUID] = TagValue{
 				UUID:      cleanUUID,
-				NM:        cfg.NM,
+				NM:        nm,
 				ValStr:    val,
-				AlarmSt:   alarmSt,
+				AlarmSt:   alrm,
 				Timestamp: ts,
 				QOS:       qos,
 			}

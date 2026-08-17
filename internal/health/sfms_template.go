@@ -691,19 +691,21 @@ var sfmsPageTemplate = template.Must(template.New("sfms-page").Parse(`<!DOCTYPE 
             statusText = '🔴 INTERRUPTED';
           }
 
-          let breakerTag = f.has_telemetry ? 'CB: ' + (f.breaker_status || (f.cbon === 1 ? 'CLOSED' : 'OPEN')) : 'No SCADA';
-          let downtimeTag = f.downtime ? '<span class="downtime-tag">⏱ ' + f.downtime + '</span>' : '';
+          let metaHtml = '';
+          if (f.downtime) {
+            metaHtml += '<span class="downtime-tag">⏱ Down: ' + f.downtime + '</span>';
+          } else if (f.is_dormant && f.schedule_start && f.schedule_end) {
+            metaHtml += '<span>🕒 Schedule: ' + f.schedule_start + ' - ' + f.schedule_end + '</span>';
+          }
 
           html += '    <div class="feeder-card ' + cardClass + '">';
           html += '      <div class="feeder-card-top">';
           html += '        <div class="feeder-name">' + f.clean_name + ' <span style="font-size: 11px; font-weight: normal; color: var(--text-dim);">[' + f.category_name + ']</span></div>';
           html += '        <div class="feeder-badge ' + badgeClass + '">' + statusText + '</div>';
           html += '      </div>';
-          html += '      <div class="feeder-meta">';
-          html += '        <span>Code: ' + (f.fdr_code || '-') + '</span>';
-          html += '        <span>' + breakerTag + '</span>';
-          if (downtimeTag) html += '        <span>' + downtimeTag + '</span>';
-          html += '      </div>';
+          if (metaHtml) {
+            html += '      <div class="feeder-meta">' + metaHtml + '</div>';
+          }
           html += '    </div>';
         });
 
