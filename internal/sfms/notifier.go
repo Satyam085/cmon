@@ -56,21 +56,19 @@ func (n *Notifier) SendInterruption(ctx context.Context, feederName, ssName stri
 
 	tgHTML := fmt.Sprintf(
 		"<b>%s</b>\n\n"+
-			"<b>Feeder:</b> %s%s (ID: %d)\n"+
+			"<b>Feeder:</b> %s%s \n"+
 			"<b>Substation:</b> %s\n"+
-			"<b>Code / BMU:</b> %s | Serial: %s\n"+
 			"<b>Time:</b> %s",
-		headerTitle, html.EscapeString(displayName), html.EscapeString(catSuffix), fid,
-		html.EscapeString(displaySS), html.EscapeString(fdrCode), html.EscapeString(bmuSerial), ts,
+		headerTitle, html.EscapeString(displayName), html.EscapeString(catSuffix),
+		html.EscapeString(displaySS), ts,
 	)
 
 	waText := fmt.Sprintf(
 		"🔴 ALERT: Feeder Interruption\n\n"+
-			"Feeder: %s%s (ID: %d)\n"+
+			"Feeder: %s%s \n"+
 			"Substation: %s\n"+
-			"Code / BMU: %s | Serial: %s\n"+
 			"Time: %s",
-		displayName, catSuffix, fid, displaySS, fdrCode, bmuSerial, ts,
+		displayName, catSuffix, displaySS, ts,
 	)
 
 	// Dispatch notifications asynchronously
@@ -121,21 +119,21 @@ func (n *Notifier) SendRecovery(ctx context.Context, feederName, ssName string, 
 
 	tgHTML := fmt.Sprintf(
 		"<b>%s</b>\n\n"+
-			"<b>Feeder:</b> %s%s (ID: %d)\n"+
+			"<b>Feeder:</b> %s%s )\n"+
 			"<b>Substation:</b> %s\n"+
 			"<b>Downtime:</b> %s\n"+
 			"<b>Time:</b> %s",
-		headerTitle, html.EscapeString(displayName), html.EscapeString(catSuffix), fid,
+		headerTitle, html.EscapeString(displayName), html.EscapeString(catSuffix),
 		html.EscapeString(displaySS), html.EscapeString(downtime), ts,
 	)
 
 	waText := fmt.Sprintf(
 		"🟢 RESTORED: Feeder Online\n\n"+
-			"Feeder: %s%s (ID: %d)\n"+
+			"Feeder: %s%s \n"+
 			"Substation: %s\n"+
 			"Downtime: %s\n"+
 			"Time: %s",
-		displayName, catSuffix, fid, displaySS, downtime, ts,
+		displayName, catSuffix, displaySS, downtime, ts,
 	)
 
 	// Dispatch notifications asynchronously
