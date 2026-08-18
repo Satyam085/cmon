@@ -124,4 +124,6 @@ type FeederState struct {
 	BreakerStatus    string
 	IsOnline         bool
 	InterruptedSince *time.Time
+	HasStartedToday  bool
+	LastWindowDate   string
 }

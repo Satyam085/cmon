@@ -43,6 +43,8 @@ type DashboardFeederItem struct {
 	BreakerStatus    string `json:"breaker_status"` // "CLOSED", "OPEN", "UNKNOWN"
 	IsOnline         bool   `json:"is_online"`
 	IsDormant        bool   `json:"is_dormant"`
+	IsAwaitingStart  bool   `json:"is_awaiting_start"`
+	HasStartedToday  bool   `json:"has_started_today"`
 	InterruptedSince string `json:"interrupted_since,omitempty"`
 	Downtime         string `json:"downtime,omitempty"`
 }
@@ -154,6 +156,8 @@ func NewMonitor(
 						BreakerStatus:    f.BreakerStatus,
 						IsOnline:         f.IsOnline,
 						InterruptedSince: intSince,
+						HasStartedToday:  f.HasStartedToday,
+						LastWindowDate:   f.LastWindowDate,
 					}
 				}
 			}
@@ -357,15 +361,27 @@ func (m *Monitor) EvaluateFeederStates(ctx context.Context, printSummary bool) e
 				totalScheduledFeeders++
 			}
 
+			todayStr := now.In(IST).Format("2006-01-02")
 			prev, exists := m.states[f.FID]
 
 			// If feeder is outside its schedule window, keep it dormant
 			if !isActiveWindow {
 				dormantScheduledFeeders++
-				if exists && prev.InterruptedSince != nil {
+				if exists {
 					prev.InterruptedSince = nil
+					prev.HasStartedToday = false
+					prev.IsOnline = false
 				}
 				continue
+			}
+
+			// Day rollover check for scheduled (non-24x7) feeders
+			if exists && !is24x7 {
+				if prev.LastWindowDate != todayStr {
+					prev.LastWindowDate = todayStr
+					prev.HasStartedToday = false
+					prev.InterruptedSince = nil
+				}
 			}
 
 			// Real-time circuit breaker status from MQTT WebSocket telemetry
@@ -384,27 +400,18 @@ func (m *Monitor) EvaluateFeederStates(ctx context.Context, printSummary bool) e
 				isOnline = f.ISACT && f.BMUISACT
 			}
 
-			if is24x7 {
-				if isOnline {
-					active24x7Feeders++
-				} else {
-					interrupted24x7Feeders++
-				}
-			} else {
-				if isOnline {
-					activeScheduledFeeders++
-				} else {
-					interruptedScheduledFeeders++
-				}
-			}
-
 			isInitial := !exists
 			if isInitial {
+				hasStartedToday := false
 				var interruptedSince *time.Time
-				if !isOnline {
+
+				if isOnline {
+					hasStartedToday = true
+				} else if is24x7 {
 					t := now
 					interruptedSince = &t
 				}
+
 				m.states[f.FID] = &FeederState{
 					FID:              f.FID,
 					Name:             f.Name,
@@ -427,9 +434,11 @@ func (m *Monitor) EvaluateFeederStates(ctx context.Context, printSummary bool) e
 					BreakerStatus:    breakerStatus,
 					IsOnline:         isOnline,
 					InterruptedSince: interruptedSince,
+					HasStartedToday:  hasStartedToday,
+					LastWindowDate:   todayStr,
 				}
 
-				if !isOnline && !m.isFirstRun {
+				if !isOnline && is24x7 && !m.isFirstRun {
 					m.notifier.SendInterruption(ctx, f.Name, ss.Name, f.FID, f.FdrCode, f.BMUSerialNo, fType)
 				}
 			} else {
@@ -443,47 +452,92 @@ func (m *Monitor) EvaluateFeederStates(ctx context.Context, printSummary bool) e
 				prev.CBOFF = cboff
 				prev.HasTelemetry = hasTelemetry
 				prev.BreakerStatus = breakerStatus
+				if !is24x7 && prev.LastWindowDate == "" {
+					prev.LastWindowDate = todayStr
+				}
 
-				// State evaluation & transition detection
-				if prev.IsOnline && !isOnline {
-					// TRANSITION: Online -> Interrupted
-					t := now
-					prev.InterruptedSince = &t
-					prev.IsOnline = false
-					prev.IsActive = f.ISACT
-					prev.BMUIsActive = f.BMUISACT
-
-					stateHasChanged = true
-					newInterruptionAlerts = append(newInterruptionAlerts, f.Name)
-					m.notifier.SendInterruption(ctx, f.Name, ss.Name, f.FID, f.FdrCode, f.BMUSerialNo, fType)
-				} else if !prev.IsOnline && isOnline {
-					// TRANSITION: Interrupted -> Restored
-					var downtimeStr = "unknown"
-					if prev.InterruptedSince != nil {
-						downtimeDuration := now.Sub(*prev.InterruptedSince)
-						downtimeStr = formatDuration(downtimeDuration)
+				if isOnline {
+					// Feeder is ON
+					if !is24x7 && !prev.HasStartedToday {
+						// First time turned ON in this schedule window
+						prev.HasStartedToday = true
+						prev.LastWindowDate = todayStr
 					}
 
-					prev.InterruptedSince = nil
-					prev.IsOnline = true
-					prev.IsActive = f.ISACT
-					prev.BMUIsActive = f.BMUISACT
+					if !prev.IsOnline {
+						// Transition from Offline -> Online
+						if prev.InterruptedSince != nil {
+							downtimeDuration := now.Sub(*prev.InterruptedSince)
+							downtimeStr := formatDuration(downtimeDuration)
+							prev.InterruptedSince = nil
+							prev.IsOnline = true
+							prev.IsActive = f.ISACT
+							prev.BMUIsActive = f.BMUISACT
 
-					stateHasChanged = true
-					newRecoveryAlerts = append(newRecoveryAlerts, f.Name)
-					m.notifier.SendRecovery(ctx, f.Name, ss.Name, f.FID, downtimeStr, fType)
+							stateHasChanged = true
+							newRecoveryAlerts = append(newRecoveryAlerts, f.Name)
+							m.notifier.SendRecovery(ctx, f.Name, ss.Name, f.FID, downtimeStr, fType)
+						} else {
+							// Initial morning start (was awaiting start)
+							prev.IsOnline = true
+							prev.IsActive = f.ISACT
+							prev.BMUIsActive = f.BMUISACT
+							stateHasChanged = true
+						}
+					} else {
+						prev.IsActive = f.ISACT
+						prev.BMUIsActive = f.BMUISACT
+					}
 				} else {
-					prev.IsActive = f.ISACT
-					prev.BMUIsActive = f.BMUISACT
-					if !isOnline && prev.InterruptedSince == nil {
-						t := now
-						prev.InterruptedSince = &t
+					// Feeder is OFF
+					canAlert := is24x7 || prev.HasStartedToday
+
+					if prev.IsOnline && !isOnline {
+						// TRANSITION: Online -> Interrupted
+						if canAlert {
+							t := now
+							prev.InterruptedSince = &t
+							prev.IsOnline = false
+							prev.IsActive = f.ISACT
+							prev.BMUIsActive = f.BMUISACT
+
+							stateHasChanged = true
+							newInterruptionAlerts = append(newInterruptionAlerts, f.Name)
+							m.notifier.SendInterruption(ctx, f.Name, ss.Name, f.FID, f.FdrCode, f.BMUSerialNo, fType)
+						} else {
+							prev.IsOnline = false
+							prev.IsActive = f.ISACT
+							prev.BMUIsActive = f.BMUISACT
+						}
+					} else {
+						prev.IsActive = f.ISACT
+						prev.BMUIsActive = f.BMUISACT
+						if canAlert && prev.InterruptedSince == nil {
+							t := now
+							prev.InterruptedSince = &t
+						}
 					}
 				}
 			}
 
-			// Build record for SQLite
 			st := m.states[f.FID]
+			if is24x7 {
+				if isOnline {
+					active24x7Feeders++
+				} else {
+					interrupted24x7Feeders++
+				}
+			} else {
+				if isOnline {
+					activeScheduledFeeders++
+				} else if st.HasStartedToday {
+					interruptedScheduledFeeders++
+				} else {
+					dormantScheduledFeeders++
+				}
+			}
+
+			// Build record for SQLite
 			feederRecordsToSave = append(feederRecordsToSave, storage.SFMSFeederRecord{
 				FID:              st.FID,
 				Name:             st.Name,
@@ -506,6 +560,8 @@ func (m *Monitor) EvaluateFeederStates(ctx context.Context, printSummary bool) e
 				BreakerStatus:    st.BreakerStatus,
 				IsOnline:         st.IsOnline,
 				InterruptedSince: st.InterruptedSince,
+				HasStartedToday:  st.HasStartedToday,
+				LastWindowDate:   st.LastWindowDate,
 				UpdatedAt:        now,
 			})
 		}
@@ -635,9 +691,18 @@ func (m *Monitor) BuildStatusReportHTML() string {
 				isOnline = f.ISACT && f.BMUISACT
 			}
 
+			hasStartedToday := false
+			if hasState {
+				hasStartedToday = st.HasStartedToday
+			}
+			isAwaitingStart := !is24x7 && !isOnline && !hasStartedToday
+
 			if isOnline {
 				totalOnline++
 				lines = append(lines, fmt.Sprintf("  🟢 %s [%s]", html.EscapeString(cleanF), html.EscapeString(fType)))
+			} else if isAwaitingStart {
+				totalDormant++
+				lines = append(lines, fmt.Sprintf("  🟡 %s [%s] (Awaiting Start)", html.EscapeString(cleanF), html.EscapeString(fType)))
 			} else {
 				totalInterrupted++
 				downtime := ""
@@ -710,7 +775,7 @@ func (m *Monitor) BuildStatusReportText() string {
 
 			totalFeeders++
 			cleanF := CleanFeederName(f.Name)
-			isActiveWindow, _, fType, _, _ := m.IsFeederInActiveWindow(f.Name, f.Cat, now)
+			isActiveWindow, is24x7, fType, _, _ := m.IsFeederInActiveWindow(f.Name, f.Cat, now)
 
 			st, hasState := states[f.FID]
 			if !isActiveWindow {
@@ -726,9 +791,18 @@ func (m *Monitor) BuildStatusReportText() string {
 				isOnline = f.ISACT && f.BMUISACT
 			}
 
+			hasStartedToday := false
+			if hasState {
+				hasStartedToday = st.HasStartedToday
+			}
+			isAwaitingStart := !is24x7 && !isOnline && !hasStartedToday
+
 			if isOnline {
 				totalOnline++
 				lines = append(lines, fmt.Sprintf("  🟢 %s [%s]", cleanF, fType))
+			} else if isAwaitingStart {
+				totalDormant++
+				lines = append(lines, fmt.Sprintf("  🟡 %s [%s] (Awaiting Start)", cleanF, fType))
 			} else {
 				totalInterrupted++
 				downtime := ""
@@ -814,8 +888,14 @@ func (m *Monitor) GetDashboardPayload() DashboardPayload {
 				summary.TelemetryActive++
 			}
 
+			hasStartedToday := false
+			if hasState {
+				hasStartedToday = st.HasStartedToday
+			}
+			isAwaitingStart := !is24x7 && isActiveWindow && !isOnline && !hasStartedToday
+
 			isDormant := !isActiveWindow
-			if isDormant {
+			if isDormant || isAwaitingStart {
 				summary.Dormant++
 			} else if isOnline {
 				summary.ActiveOnline++
@@ -848,6 +928,8 @@ func (m *Monitor) GetDashboardPayload() DashboardPayload {
 				BreakerStatus:    breakerStatus,
 				IsOnline:         isOnline,
 				IsDormant:        isDormant,
+				IsAwaitingStart:  isAwaitingStart,
+				HasStartedToday:  hasStartedToday,
 				InterruptedSince: intSinceStr,
 				Downtime:         downtimeStr,
 			})

@@ -852,9 +852,9 @@ var sfmsPageTemplate = template.Must(template.New("sfms-page").Parse(`<!DOCTYPE 
 
           // Filter match
           if (activeFilter === 'all') return true;
-          if (activeFilter === 'interrupted') return !f.is_online && !f.is_dormant;
+          if (activeFilter === 'interrupted') return !f.is_online && !f.is_dormant && !f.is_awaiting_start;
           if (activeFilter === 'online') return f.is_online && !f.is_dormant;
-          if (activeFilter === 'dormant') return f.is_dormant;
+          if (activeFilter === 'dormant') return f.is_dormant || f.is_awaiting_start;
           if (activeFilter === 'jgy') return (f.category_name || '').toUpperCase().includes('JGY');
           if (activeFilter === 'ag') return (f.category_name || '').toUpperCase().includes('AG');
           return true;
@@ -878,6 +878,10 @@ var sfmsPageTemplate = template.Must(template.New("sfms-page").Parse(`<!DOCTYPE 
             cardClass = 'dormant';
             badgeClass = 'dormant';
             statusText = '🟡 DORMANT';
+          } else if (f.is_awaiting_start) {
+            cardClass = 'dormant';
+            badgeClass = 'dormant';
+            statusText = '🟡 AWAITING START';
           } else if (!f.is_online) {
             cardClass = 'interrupted';
             badgeClass = 'interrupted';
@@ -885,9 +889,9 @@ var sfmsPageTemplate = template.Must(template.New("sfms-page").Parse(`<!DOCTYPE 
           }
 
           let metaHtml = '';
-          if (f.downtime) {
+          if (f.downtime && !f.is_awaiting_start) {
             metaHtml += '<span class="downtime-tag">⏱ Down: ' + f.downtime + '</span>';
-          } else if (f.is_dormant && f.schedule_start && f.schedule_end) {
+          } else if ((f.is_dormant || f.is_awaiting_start) && f.schedule_start && f.schedule_end) {
             metaHtml += '<span>🕒 Schedule: ' + f.schedule_start + ' - ' + f.schedule_end + '</span>';
           }
 

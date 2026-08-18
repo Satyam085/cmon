@@ -170,6 +170,8 @@ func New() (*Storage, error) {
 			breaker_status TEXT,
 			is_online INTEGER,
 			interrupted_since DATETIME,
+			has_started_today INTEGER DEFAULT 0,
+			last_window_date TEXT,
 			updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
 		);
 		CREATE TABLE IF NOT EXISTS sfms_events (
@@ -206,6 +208,15 @@ func New() (*Storage, error) {
 		{"complain_date", "TEXT"},
 	} {
 		if err := s.ensureComplaintColumn(col.name, col.typ); err != nil {
+			return nil, err
+		}
+	}
+
+	for _, col := range []struct{ name, typ string }{
+		{"has_started_today", "INTEGER DEFAULT 0"},
+		{"last_window_date", "TEXT"},
+	} {
+		if err := s.ensureSFMSFeederColumn(col.name, col.typ); err != nil {
 			return nil, err
 		}
 	}
@@ -964,6 +975,17 @@ func (s *Storage) ensureComplaintColumn(name, typ string) error {
 	return nil
 }
 
+func (s *Storage) ensureSFMSFeederColumn(name, typ string) error {
+	if _, err := s.db.Exec(fmt.Sprintf(`ALTER TABLE sfms_feeders ADD COLUMN %s %s`, name, typ)); err != nil {
+		// Ignore "duplicate column" style errors across SQLite variants.
+		if err.Error() != "SQL logic error: duplicate column name: "+name+" (1)" &&
+			err.Error() != "duplicate column name: "+name {
+			return fmt.Errorf("ensure sfms_feeders.%s column: %w", name, err)
+		}
+	}
+	return nil
+}
+
 // GenerateLocalComplaintID generates a local complaint ID in format VLDYYYYMMDDSR.
 // SR starts at 01 each day and increments. Thread-safe via s.mu write lock.
 func (s *Storage) GenerateLocalComplaintID() (string, error) {
@@ -1020,6 +1042,8 @@ type SFMSFeederRecord struct {
 	BreakerStatus    string     `json:"breaker_status"`
 	IsOnline         bool       `json:"is_online"`
 	InterruptedSince *time.Time `json:"interrupted_since,omitempty"`
+	HasStartedToday  bool       `json:"has_started_today"`
+	LastWindowDate   string     `json:"last_window_date,omitempty"`
 	UpdatedAt        time.Time  `json:"updated_at"`
 }
 
@@ -1058,8 +1082,8 @@ func (s *Storage) SaveSFMSFeeders(feeders []SFMSFeederRecord) error {
 			fid, name, cat, cat_name, is_24x7, schedule_start, schedule_end,
 			substation_id, substation_name, bmu_serial_no, fdr_code, device, seq,
 			is_active, bmu_is_active, cbon, cboff, has_telemetry, breaker_status,
-			is_online, interrupted_since, updated_at
-		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+			is_online, interrupted_since, has_started_today, last_window_date, updated_at
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
 		ON CONFLICT(fid) DO UPDATE SET
 			name = excluded.name,
 			cat = excluded.cat,
@@ -1081,6 +1105,8 @@ func (s *Storage) SaveSFMSFeeders(feeders []SFMSFeederRecord) error {
 			breaker_status = excluded.breaker_status,
 			is_online = excluded.is_online,
 			interrupted_since = excluded.interrupted_since,
+			has_started_today = excluded.has_started_today,
+			last_window_date = excluded.last_window_date,
 			updated_at = CURRENT_TIMESTAMP
 	`)
 	if err != nil {
@@ -1109,6 +1135,10 @@ func (s *Storage) SaveSFMSFeeders(feeders []SFMSFeederRecord) error {
 		if f.IsOnline {
 			isOnline = 1
 		}
+		hasStarted := 0
+		if f.HasStartedToday {
+			hasStarted = 1
+		}
 
 		var intSince *string
 		if f.InterruptedSince != nil && !f.InterruptedSince.IsZero() {
@@ -1120,7 +1150,7 @@ func (s *Storage) SaveSFMSFeeders(feeders []SFMSFeederRecord) error {
 			f.FID, f.Name, f.Category, f.CategoryName, is24x7, f.ScheduleStart, f.ScheduleEnd,
 			f.SubstationID, f.SubstationName, f.BMUSerialNo, f.FdrCode, f.Device, f.Seq,
 			isAct, bmuAct, f.CBON, f.CBOFF, hasTelem, f.BreakerStatus,
-			isOnline, intSince,
+			isOnline, intSince, hasStarted, f.LastWindowDate,
 		)
 		if err != nil {
 			return fmt.Errorf("exec sfms save for fid %d: %w", f.FID, err)
@@ -1139,7 +1169,7 @@ func (s *Storage) GetSFMSFeeders() ([]SFMSFeederRecord, error) {
 		SELECT fid, name, cat, cat_name, is_24x7, schedule_start, schedule_end,
 			substation_id, substation_name, bmu_serial_no, fdr_code, device, seq,
 			is_active, bmu_is_active, cbon, cboff, has_telemetry, breaker_status,
-			is_online, interrupted_since, updated_at
+			is_online, interrupted_since, has_started_today, last_window_date, updated_at
 		FROM sfms_feeders
 		ORDER BY substation_name ASC, name ASC
 	`)
@@ -1151,14 +1181,14 @@ func (s *Storage) GetSFMSFeeders() ([]SFMSFeederRecord, error) {
 	var feeders []SFMSFeederRecord
 	for rows.Next() {
 		var f SFMSFeederRecord
-		var is24x7, isAct, bmuAct, hasTelem, isOnline int
-		var intSinceStr, updatedAtStr sql.NullString
+		var is24x7, isAct, bmuAct, hasTelem, isOnline, hasStarted int
+		var intSinceStr, lastWindowDateStr, updatedAtStr sql.NullString
 
 		err := rows.Scan(
 			&f.FID, &f.Name, &f.Category, &f.CategoryName, &is24x7, &f.ScheduleStart, &f.ScheduleEnd,
 			&f.SubstationID, &f.SubstationName, &f.BMUSerialNo, &f.FdrCode, &f.Device, &f.Seq,
 			&isAct, &bmuAct, &f.CBON, &f.CBOFF, &hasTelem, &f.BreakerStatus,
-			&isOnline, &intSinceStr, &updatedAtStr,
+			&isOnline, &intSinceStr, &hasStarted, &lastWindowDateStr, &updatedAtStr,
 		)
 		if err != nil {
 			return nil, fmt.Errorf("scan sfms feeder: %w", err)
@@ -1169,6 +1199,10 @@ func (s *Storage) GetSFMSFeeders() ([]SFMSFeederRecord, error) {
 		f.BMUIsActive = bmuAct == 1
 		f.HasTelemetry = hasTelem == 1
 		f.IsOnline = isOnline == 1
+		f.HasStartedToday = hasStarted == 1
+		if lastWindowDateStr.Valid {
+			f.LastWindowDate = lastWindowDateStr.String
+		}
 
 		if intSinceStr.Valid && intSinceStr.String != "" {
 			layouts := []string{

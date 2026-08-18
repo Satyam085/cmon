@@ -97,9 +97,11 @@ func TestSFMSStorage(t *testing.T) {
 		t.Fatalf("expected 2 feeders, got %d", len(gotFeeders))
 	}
 
-	// Test InterruptedSince persistence
+	// Test InterruptedSince and HasStartedToday persistence
 	intTime := time.Date(2026, 8, 18, 14, 30, 0, 0, IST)
 	feeders[1].InterruptedSince = &intTime
+	feeders[1].HasStartedToday = true
+	feeders[1].LastWindowDate = "2026-08-18"
 	if err := stor.SaveSFMSFeeders(feeders); err != nil {
 		t.Fatalf("SaveSFMSFeeders with InterruptedSince failed: %v", err)
 	}
@@ -118,6 +120,12 @@ func TestSFMSStorage(t *testing.T) {
 	}
 	if hill.InterruptedSince.In(IST).Format("2006-01-02 15:04:05") != "2026-08-18 14:30:00" {
 		t.Errorf("got InterruptedSince %s, want 2026-08-18 14:30:00", hill.InterruptedSince.In(IST).Format("2006-01-02 15:04:05"))
+	}
+	if !hill.HasStartedToday {
+		t.Errorf("expected HasStartedToday to be true")
+	}
+	if hill.LastWindowDate != "2026-08-18" {
+		t.Errorf("got LastWindowDate %q, want %q", hill.LastWindowDate, "2026-08-18")
 	}
 
 	// Test LogSFMSEvent and GetSFMSEvents

@@ -145,3 +145,135 @@ func TestFormatDuration(t *testing.T) {
 		}
 	}
 }
+
+func TestAGFeederStartupGatedAlerting(t *testing.T) {
+	withTempCWD(t)
+
+	stor, err := storage.New()
+	if err != nil {
+		t.Fatalf("storage.New: %v", err)
+	}
+	defer stor.Close()
+
+	cfg := &Config{
+		FilterFeeders: []string{"11kV Bahej"},
+		FeederSchedules: map[string]FeederSchedule{
+			"BAHEJ": {
+				Type:  "AG",
+				Start: "00:01",
+				End:   "23:59",
+			},
+		},
+	}
+
+	notifier := NewNotifier(cfg, stor, nil, nil)
+	mon := NewMonitor(cfg, nil, nil, notifier, stor, nil)
+
+	feederInfo := FeederInfo{
+		FID:         201,
+		Name:        "11kV Bahej",
+		Cat:         2,
+		ISACT:       false,
+		BMUISACT:    false,
+		BMUSerialNo: "BMU201",
+		FdrCode:     "322708",
+	}
+
+	mon.cachedSubstations = []Substation{
+		{
+			SSID:       1,
+			Name:       "66kV Valod",
+			FeederInfo: []FeederInfo{feederInfo},
+		},
+	}
+
+	// 1. Morning window active (e.g. 08:00 AM IST), feeder starts in OFF state
+	_ = mon.EvaluateFeederStates(context.Background(), false)
+
+	st := mon.states[201]
+	if st == nil {
+		t.Fatalf("expected state for FID 201")
+	}
+	if st.HasStartedToday {
+		t.Errorf("expected HasStartedToday to be false before first energization")
+	}
+	if st.InterruptedSince != nil {
+		t.Errorf("expected InterruptedSince to be nil before first start, got %v", st.InterruptedSince)
+	}
+
+	// Check status report
+	report := mon.BuildStatusReportHTML()
+	if !strings.Contains(report, "Awaiting Start") {
+		t.Errorf("expected report to show 'Awaiting Start', got: %s", report)
+	}
+
+	// Check dashboard payload
+	payload := mon.GetDashboardPayload()
+	if len(payload.Groups) != 1 || len(payload.Groups[0].Feeders) != 1 {
+		t.Fatalf("expected 1 feeder in payload")
+	}
+	if !payload.Groups[0].Feeders[0].IsAwaitingStart {
+		t.Errorf("expected IsAwaitingStart to be true in payload")
+	}
+	if payload.Summary.InterruptedDown != 0 {
+		t.Errorf("expected InterruptedDown count to be 0, got %d", payload.Summary.InterruptedDown)
+	}
+
+	// 2. Feeder is energized by operator (turns ON)
+	mon.cachedSubstations[0].FeederInfo[0].ISACT = true
+	mon.cachedSubstations[0].FeederInfo[0].BMUISACT = true
+	_ = mon.EvaluateFeederStates(context.Background(), false)
+
+	st = mon.states[201]
+	if !st.HasStartedToday {
+		t.Errorf("expected HasStartedToday to become true after turning ON")
+	}
+	if !st.IsOnline {
+		t.Errorf("expected IsOnline to be true")
+	}
+
+	// 3. Feeder trips (turns OFF during active window)
+	tripTime := time.Now().In(IST)
+	mon.cachedSubstations[0].FeederInfo[0].ISACT = false
+	mon.cachedSubstations[0].FeederInfo[0].BMUISACT = false
+	_ = mon.EvaluateFeederStates(context.Background(), false)
+
+	st = mon.states[201]
+	if !st.HasStartedToday {
+		t.Errorf("expected HasStartedToday to remain true")
+	}
+	if st.IsOnline {
+		t.Errorf("expected IsOnline to be false after trip")
+	}
+	if st.InterruptedSince == nil {
+		t.Fatalf("expected InterruptedSince to be set after tripping")
+	}
+
+	// Event log check
+	events, err := stor.GetSFMSEvents(5)
+	if err != nil || len(events) == 0 {
+		t.Fatalf("expected interruption event to be logged in SQLite: %v", err)
+	}
+	if events[0].EventType != "interruption" || events[0].FeederName != "Bahej" {
+		t.Errorf("unexpected logged event: %+v", events[0])
+	}
+
+	// 4. Feeder is restored
+	mon.cachedSubstations[0].FeederInfo[0].ISACT = true
+	mon.cachedSubstations[0].FeederInfo[0].BMUISACT = true
+	_ = mon.EvaluateFeederStates(context.Background(), false)
+
+	st = mon.states[201]
+	if !st.IsOnline {
+		t.Errorf("expected IsOnline to be true after recovery")
+	}
+	if st.InterruptedSince != nil {
+		t.Errorf("expected InterruptedSince to be cleared after recovery, got %v", st.InterruptedSince)
+	}
+
+	events, _ = stor.GetSFMSEvents(5)
+	if len(events) < 2 || events[0].EventType != "recovery" {
+		t.Errorf("expected recovery event to be logged in SQLite, got: %+v", events)
+	}
+	_ = tripTime
+}
