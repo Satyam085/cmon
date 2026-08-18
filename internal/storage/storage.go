@@ -1023,6 +1023,9 @@ type SFMSFeederRecord struct {
 	UpdatedAt        time.Time  `json:"updated_at"`
 }
 
+// IST is the standard Indian Standard Time zone (UTC+5:30).
+var IST = time.FixedZone("IST", 5*3600+30*60)
+
 // SFMSEvent represents an outage or recovery audit event.
 type SFMSEvent struct {
 	ID             int64     `json:"id"`
@@ -1036,6 +1039,7 @@ type SFMSEvent struct {
 	Downtime       string    `json:"downtime,omitempty"`
 	Message        string    `json:"message"`
 	Timestamp      time.Time `json:"timestamp"`
+	TimestampIST   string    `json:"timestamp_ist,omitempty"`
 }
 
 // SaveSFMSFeeders upserts feeder status records into SQLite.
@@ -1107,8 +1111,8 @@ func (s *Storage) SaveSFMSFeeders(feeders []SFMSFeederRecord) error {
 		}
 
 		var intSince *string
-		if f.InterruptedSince != nil {
-			str := f.InterruptedSince.Format("2006-01-02 15:04:05")
+		if f.InterruptedSince != nil && !f.InterruptedSince.IsZero() {
+			str := f.InterruptedSince.Format(time.RFC3339)
 			intSince = &str
 		}
 
@@ -1167,13 +1171,32 @@ func (s *Storage) GetSFMSFeeders() ([]SFMSFeederRecord, error) {
 		f.IsOnline = isOnline == 1
 
 		if intSinceStr.Valid && intSinceStr.String != "" {
-			if t, parseErr := time.Parse("2006-01-02 15:04:05", intSinceStr.String); parseErr == nil {
-				f.InterruptedSince = &t
+			layouts := []string{
+				time.RFC3339,
+				"2006-01-02 15:04:05-07:00",
+				"2006-01-02T15:04:05Z",
+				"2006-01-02 15:04:05",
+			}
+			for _, layout := range layouts {
+				if t, parseErr := time.ParseInLocation(layout, intSinceStr.String, IST); parseErr == nil {
+					tIST := t.In(IST)
+					f.InterruptedSince = &tIST
+					break
+				}
 			}
 		}
 		if updatedAtStr.Valid && updatedAtStr.String != "" {
-			if t, parseErr := time.Parse("2006-01-02 15:04:05", updatedAtStr.String); parseErr == nil {
-				f.UpdatedAt = t
+			layouts := []string{
+				time.RFC3339,
+				"2006-01-02 15:04:05-07:00",
+				"2006-01-02T15:04:05Z",
+				"2006-01-02 15:04:05",
+			}
+			for _, layout := range layouts {
+				if t, parseErr := time.ParseInLocation(layout, updatedAtStr.String, IST); parseErr == nil {
+					f.UpdatedAt = t.In(IST)
+					break
+				}
 			}
 		}
 
@@ -1188,13 +1211,19 @@ func (s *Storage) LogSFMSEvent(event SFMSEvent) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
+	ts := event.Timestamp
+	if ts.IsZero() {
+		ts = time.Now()
+	}
+	tsStr := ts.Format(time.RFC3339)
+
 	_, err := s.db.Exec(`
 		INSERT INTO sfms_events (
 			event_type, fid, feeder_name, substation_name, category,
 			fdr_code, bmu_serial, downtime, message, timestamp
-		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 	`, event.EventType, event.FID, event.FeederName, event.SubstationName, event.Category,
-		event.FdrCode, event.BMUSerial, event.Downtime, event.Message)
+		event.FdrCode, event.BMUSerial, event.Downtime, event.Message, tsStr)
 	if err != nil {
 		return fmt.Errorf("log sfms event: %w", err)
 	}
@@ -1236,10 +1265,22 @@ func (s *Storage) GetSFMSEvents(limit int) ([]SFMSEvent, error) {
 		if downtimeStr.Valid {
 			e.Downtime = downtimeStr.String
 		}
-		if tsStr.Valid {
-			if t, parseErr := time.Parse("2006-01-02 15:04:05", tsStr.String); parseErr == nil {
-				e.Timestamp = t
+		if tsStr.Valid && tsStr.String != "" {
+			layouts := []string{
+				time.RFC3339,
+				"2006-01-02 15:04:05-07:00",
+				"2006-01-02T15:04:05Z",
+				"2006-01-02 15:04:05",
 			}
+			for _, layout := range layouts {
+				if t, parseErr := time.ParseInLocation(layout, tsStr.String, IST); parseErr == nil {
+					e.Timestamp = t.In(IST)
+					break
+				}
+			}
+		}
+		if !e.Timestamp.IsZero() {
+			e.TimestampIST = e.Timestamp.In(IST).Format("02-01-06 15:04:05")
 		}
 		events = append(events, e)
 	}

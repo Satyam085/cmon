@@ -31,7 +31,6 @@
     "11kV Ambach",
     "11kV Degama",
     "11kV Gandhi",
-    "11kV Khanpur",
     "11kV Tad",
     "11kV Bajipura",
     "11kV Bavli",
@@ -227,13 +226,6 @@
       "end": "15:00",
       "substation": "Rupvada",
       "code": "322206"
-    },
-    "KHANPUR": {
-      "type": "AGSKY",
-      "start": "07:20",
-      "end": "15:00",
-      "substation": "Rupvada",
-      "code": "322202"
     },
     "TAD": {
       "type": "AG",

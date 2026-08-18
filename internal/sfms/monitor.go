@@ -122,6 +122,44 @@ func NewMonitor(
 		}
 	}
 
+	states := make(map[int]*FeederState)
+	if stor != nil {
+		if savedFeeders, err := stor.GetSFMSFeeders(); err == nil {
+			for _, f := range savedFeeders {
+				if f.FID > 0 {
+					var intSince *time.Time
+					if f.InterruptedSince != nil && !f.InterruptedSince.IsZero() {
+						t := f.InterruptedSince.In(IST)
+						intSince = &t
+					}
+					states[f.FID] = &FeederState{
+						FID:              f.FID,
+						Name:             f.Name,
+						Category:         f.Category,
+						CategoryName:     f.CategoryName,
+						Is24x7:           f.Is24x7,
+						ScheduleStart:    f.ScheduleStart,
+						ScheduleEnd:      f.ScheduleEnd,
+						SubstationID:     f.SubstationID,
+						SubstationName:   f.SubstationName,
+						BMUSerialNo:      f.BMUSerialNo,
+						FdrCode:          f.FdrCode,
+						Device:           f.Device,
+						Seq:              f.Seq,
+						IsActive:         f.IsActive,
+						BMUIsActive:      f.BMUIsActive,
+						CBON:             f.CBON,
+						CBOFF:            f.CBOFF,
+						HasTelemetry:     f.HasTelemetry,
+						BreakerStatus:    f.BreakerStatus,
+						IsOnline:         f.IsOnline,
+						InterruptedSince: intSince,
+					}
+				}
+			}
+		}
+	}
+
 	return &Monitor{
 		config:         cfg,
 		sfmsClient:     client,
@@ -129,7 +167,7 @@ func NewMonitor(
 		notifier:       notifier,
 		stor:           stor,
 		wsHub:          wsHub,
-		states:         make(map[int]*FeederState),
+		states:         states,
 		isFirstRun:     true,
 		tokenUpdatedAt: tokenUpdatedAt,
 	}
@@ -437,6 +475,10 @@ func (m *Monitor) EvaluateFeederStates(ctx context.Context, printSummary bool) e
 				} else {
 					prev.IsActive = f.ISACT
 					prev.BMUIsActive = f.BMUISACT
+					if !isOnline && prev.InterruptedSince == nil {
+						t := now
+						prev.InterruptedSince = &t
+					}
 				}
 			}
 
@@ -761,7 +803,7 @@ func (m *Monitor) GetDashboardPayload() DashboardPayload {
 				cbon = st.CBON
 				cboff = st.CBOFF
 				if st.InterruptedSince != nil {
-					intSinceStr = st.InterruptedSince.Format("02-01-06 15:04:05")
+					intSinceStr = st.InterruptedSince.In(IST).Format("02-01-06 15:04:05")
 					downtimeStr = formatDuration(now.Sub(*st.InterruptedSince))
 				}
 			} else {
@@ -875,6 +917,9 @@ func (m *Monitor) isFeederFiltered(name string) bool {
 }
 
 func formatDuration(d time.Duration) string {
+	if d < 0 {
+		d = 0
+	}
 	d = d.Round(time.Second)
 	h := int(d.Hours())
 	m := int(d.Minutes()) % 60

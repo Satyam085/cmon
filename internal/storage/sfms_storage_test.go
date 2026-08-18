@@ -97,7 +97,31 @@ func TestSFMSStorage(t *testing.T) {
 		t.Fatalf("expected 2 feeders, got %d", len(gotFeeders))
 	}
 
+	// Test InterruptedSince persistence
+	intTime := time.Date(2026, 8, 18, 14, 30, 0, 0, IST)
+	feeders[1].InterruptedSince = &intTime
+	if err := stor.SaveSFMSFeeders(feeders); err != nil {
+		t.Fatalf("SaveSFMSFeeders with InterruptedSince failed: %v", err)
+	}
+	gotFeeders2, err := stor.GetSFMSFeeders()
+	if err != nil {
+		t.Fatalf("GetSFMSFeeders failed: %v", err)
+	}
+	var hill *SFMSFeederRecord
+	for i := range gotFeeders2 {
+		if gotFeeders2[i].FID == 102 {
+			hill = &gotFeeders2[i]
+		}
+	}
+	if hill == nil || hill.InterruptedSince == nil {
+		t.Fatalf("expected Hill feeder to have InterruptedSince set")
+	}
+	if hill.InterruptedSince.In(IST).Format("2006-01-02 15:04:05") != "2026-08-18 14:30:00" {
+		t.Errorf("got InterruptedSince %s, want 2026-08-18 14:30:00", hill.InterruptedSince.In(IST).Format("2006-01-02 15:04:05"))
+	}
+
 	// Test LogSFMSEvent and GetSFMSEvents
+	eventTime := time.Date(2026, 8, 18, 14, 30, 0, 0, IST)
 	event := SFMSEvent{
 		EventType:      "interruption",
 		FID:            102,
@@ -106,6 +130,7 @@ func TestSFMSStorage(t *testing.T) {
 		Category:       "HTEX",
 		FdrCode:        "322702",
 		Message:        "Feeder Hill interrupted at Bhimpore",
+		Timestamp:      eventTime,
 	}
 
 	if err := stor.LogSFMSEvent(event); err != nil {
@@ -121,6 +146,9 @@ func TestSFMSStorage(t *testing.T) {
 	}
 	if events[0].FeederName != "Hill" || events[0].EventType != "interruption" {
 		t.Errorf("unexpected event: %+v", events[0])
+	}
+	if events[0].TimestampIST != "18-08-26 14:30:00" {
+		t.Errorf("got TimestampIST %q, want %q", events[0].TimestampIST, "18-08-26 14:30:00")
 	}
 }
 

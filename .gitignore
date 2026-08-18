@@ -4,4 +4,6 @@ build
 .vscode
 whatsapp.db
 cmon.db
+cmon.db-shm
+cmon.db-wal
 cmon

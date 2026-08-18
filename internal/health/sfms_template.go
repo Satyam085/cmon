@@ -926,7 +926,22 @@ var sfmsPageTemplate = template.Must(template.New("sfms-page").Parse(`<!DOCTYPE 
                     e.event_type === 'recovery' ? '<span style="color: var(--success); font-weight: 700;">🟢 Restored</span>' :
                     '<span style="color: var(--warn); font-weight: 700;">⚠️ ' + e.event_type + '</span>';
 
-        let ts = e.timestamp ? new Date(e.timestamp).toLocaleTimeString('en-IN', { hour12: false }) : '-';
+        let ts = '-';
+        if (e.timestamp_ist) {
+          ts = e.timestamp_ist;
+        } else if (e.timestamp) {
+          const d = new Date(e.timestamp);
+          ts = d.toLocaleString('en-GB', {
+            timeZone: 'Asia/Kolkata',
+            hour12: false,
+            day: '2-digit',
+            month: '2-digit',
+            year: '2-digit',
+            hour: '2-digit',
+            minute: '2-digit',
+            second: '2-digit'
+          }).replace(',', '');
+        }
 
         rows += '<tr>';
         rows += '  <td>' + ts + '</td>';
