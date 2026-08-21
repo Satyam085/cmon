@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"html"
 	"log"
+	"strings"
 	"sync"
 	"time"
 
@@ -41,6 +42,12 @@ func NewNotifier(cfg *Config, stor *storage.Storage, tg TelegramSender, wa Whats
 	}
 }
 
+// isAGCategory reports whether a feeder category is agricultural (AG, AGSKY, ...).
+// AG feeders are dashboard-only: no Telegram/WhatsApp alerts.
+func isAGCategory(category string) bool {
+	return strings.HasPrefix(strings.ToUpper(strings.TrimSpace(category)), "AG")
+}
+
 // SendInterruption sends real-time feeder interruption alerts to BOTH Telegram and WhatsApp.
 func (n *Notifier) SendInterruption(ctx context.Context, feederName, ssName string, fid int, fdrCode, bmuSerial, category string) {
 	ts := FormatNowIST()
@@ -71,8 +78,8 @@ func (n *Notifier) SendInterruption(ctx context.Context, feederName, ssName stri
 		displayName, catSuffix, displaySS, ts,
 	)
 
-	// Dispatch notifications asynchronously
-	if n.tg != nil {
+	// Dispatch notifications asynchronously (AG feeders are dashboard-only)
+	if n.tg != nil && !isAGCategory(category) {
 		go func() {
 			if err := n.tg.SendHTML(tgHTML); err != nil {
 				log.Printf("⚠️  [SFMS] Telegram interruption alert failed: %v", err)
@@ -80,7 +87,7 @@ func (n *Notifier) SendInterruption(ctx context.Context, feederName, ssName stri
 		}()
 	}
 
-	if n.wa != nil {
+	if n.wa != nil && !isAGCategory(category) {
 		go func() {
 			if err := n.wa.SendMessage(waText); err != nil {
 				log.Printf("⚠️  [SFMS] WhatsApp interruption alert failed: %v", err)
@@ -136,8 +143,8 @@ func (n *Notifier) SendRecovery(ctx context.Context, feederName, ssName string, 
 		displayName, catSuffix, displaySS, downtime, ts,
 	)
 
-	// Dispatch notifications asynchronously
-	if n.tg != nil {
+	// Dispatch notifications asynchronously (AG feeders are dashboard-only)
+	if n.tg != nil && !isAGCategory(category) {
 		go func() {
 			if err := n.tg.SendHTML(tgHTML); err != nil {
 				log.Printf("⚠️  [SFMS] Telegram recovery alert failed: %v", err)
@@ -145,7 +152,7 @@ func (n *Notifier) SendRecovery(ctx context.Context, feederName, ssName string, 
 		}()
 	}
 
-	if n.wa != nil {
+	if n.wa != nil && !isAGCategory(category) {
 		go func() {
 			if err := n.wa.SendMessage(waText); err != nil {
 				log.Printf("⚠️  [SFMS] WhatsApp recovery alert failed: %v", err)
