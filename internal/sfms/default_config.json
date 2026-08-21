@@ -61,7 +61,7 @@
   "feeder_schedules": {
     "BAHEJ": {
       "type": "AG",
-      "start": "08:20",
+      "start": "08:00",
       "end": "16:00",
       "substation": "Bhimpore",
       "code": "322707"
@@ -75,7 +75,7 @@
     },
     "HATHUKA": {
       "type": "AG",
-      "start": "08:20",
+      "start": "08:00",
       "end": "16:00",
       "substation": "Bhimpore",
       "code": "322706"
@@ -89,14 +89,14 @@
     },
     "KHAKHAR": {
       "type": "AG",
-      "start": "08:20",
+      "start": "08:00",
       "end": "16:00",
       "substation": "Bhimpore",
       "code": "322701"
     },
     "KUMBHIYA": {
       "type": "AG",
-      "start": "08:20",
+      "start": "08:00",
       "end": "16:00",
       "substation": "Bhimpore",
       "code": "322705"
@@ -117,21 +117,21 @@
     },
     "KAMALCHHOD": {
       "type": "AG",
-      "start": "07:20",
+      "start": "07:00",
       "end": "15:00",
       "substation": "Borakhadi",
       "code": "321106"
     },
     "DHODHIYA": {
       "type": "AG",
-      "start": "07:20",
+      "start": "07:00",
       "end": "15:00",
       "substation": "Degama",
       "code": "329801"
     },
     "KOKANVAD": {
       "type": "AG",
-      "start": "07:20",
+      "start": "07:00",
       "end": "15:00",
       "substation": "Degama",
       "code": "329802"
@@ -152,14 +152,14 @@
     },
     "DHARAMPURA": {
       "type": "AG",
-      "start": "07:20",
+      "start": "07:00",
       "end": "15:00",
       "substation": "Godadha",
       "code": "532804"
     },
     "PAHAD": {
       "type": "AG",
-      "start": "07:20",
+      "start": "07:00",
       "end": "15:00",
       "substation": "Godadha",
       "code": "532803"
@@ -173,7 +173,7 @@
     },
     "DUNGARI": {
       "type": "AG",
-      "start": "07:20",
+      "start": "07:00",
       "end": "15:00",
       "substation": "Kelkui",
       "code": "388705"
@@ -187,14 +187,14 @@
     },
     "NALOTHA": {
       "type": "AG",
-      "start": "07:20",
+      "start": "07:00",
       "end": "15:00",
       "substation": "Kelkui",
       "code": "388702"
     },
     "PARSHI": {
       "type": "AG",
-      "start": "07:20",
+      "start": "07:00",
       "end": "15:00",
       "substation": "Kelkui",
       "code": "388701"
@@ -222,28 +222,28 @@
     },
     "GANDHI": {
       "type": "AGSKY",
-      "start": "07:20",
+      "start": "07:00",
       "end": "15:00",
       "substation": "Rupvada",
       "code": "322206"
     },
     "TAD": {
       "type": "AG",
-      "start": "07:20",
+      "start": "07:00",
       "end": "15:00",
       "substation": "Rupvada",
       "code": "322208"
     },
     "BAJIPURA": {
       "type": "AG",
-      "start": "07:20",
+      "start": "07:00",
       "end": "15:00",
       "substation": "Valod",
       "code": "102503"
     },
     "BAVLI": {
       "type": "AG",
-      "start": "07:20",
+      "start": "07:00",
       "end": "15:00",
       "substation": "Valod",
       "code": "102502"
@@ -264,28 +264,28 @@
     },
     "NANSAD": {
       "type": "AG",
-      "start": "07:20",
+      "start": "07:00",
       "end": "15:00",
       "substation": "Valod",
       "code": "102507"
     },
     "PAVRAN": {
       "type": "AG",
-      "start": "07:20",
+      "start": "07:00",
       "end": "15:00",
       "substation": "Valod",
       "code": "102514"
     },
     "RUPVADA": {
       "type": "AG",
-      "start": "07:20",
+      "start": "07:00",
       "end": "15:00",
       "substation": "Valod",
       "code": "102511"
     },
     "SIKER": {
       "type": "AG",
-      "start": "07:20",
+      "start": "07:00",
       "end": "15:00",
       "substation": "Valod",
       "code": "102508"
@@ -306,7 +306,7 @@
     },
     "TOKARVA": {
       "type": "AG",
-      "start": "07:20",
+      "start": "07:00",
       "end": "15:00",
       "substation": "Valod",
       "code": "102509"
@@ -334,14 +334,14 @@
     },
     "DADARIYA": {
       "type": "AG",
-      "start": "07:20",
+      "start": "07:00",
       "end": "15:00",
       "substation": "Virpore",
       "code": "140206"
     },
     "VIRPUR": {
       "type": "AG",
-      "start": "07:20",
+      "start": "07:00",
       "end": "15:00",
       "substation": "Virpore",
       "code": "140204"
